@@ -41,12 +41,6 @@ type Store struct {
 	mu       sync.Mutex
 }
 
-// isLocalRepo returns true if this is a local repository (not remote).
-func (s *Store) isLocalRepo() bool {
-	// If gitURL equals repoPath, it's a local repo (set during initialization)
-	return s.gitURL == s.repoPath
-}
-
 // NewLocal creates a store using an existing local git clone.
 // It will work directly in the repository and perform push/pull if a remote is configured.
 func NewLocal(ctx context.Context, localPath string) (*Store, error) {
@@ -122,6 +116,12 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 func New(ctx context.Context, gitURL string) (*Store, error) {
 	// For backward compatibility, treat as remote
 	return NewRemote(ctx, gitURL)
+}
+
+// isLocalRepo returns true if this is a local repository (not remote).
+func (s *Store) isLocalRepo() bool {
+	// If gitURL equals repoPath, it's a local repo (set during initialization)
+	return s.gitURL == s.repoPath
 }
 
 func (s *Store) initializeRemote(ctx context.Context) error {

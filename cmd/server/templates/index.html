@@ -22,6 +22,8 @@
                 <th>Hostname</th>
                 <th>User</th>
                 <th>Last Seen</th>
+                <th>CPU Load</th>
+                <th>Users</th>
             </tr>
         </thead>
         <tbody>
@@ -31,10 +33,12 @@
                 <td>{{.Hostname}}</td>
                 <td>{{.User}}</td>
                 <td class="status">{{.LastSeen.Format "2006-01-02 15:04:05"}}</td>
+                <td class="status">{{if .CPULoad}}{{.CPULoad}}{{else}}-{{end}}</td>
+                <td class="status">{{if .LoggedInUsers}}{{.LoggedInUsers}}{{else}}-{{end}}</td>
             </tr>
             {{else}}
             <tr>
-                <td colspan="4">No devices registered</td>
+                <td colspan="6">No devices registered</td>
             </tr>
             {{end}}
         </tbody>

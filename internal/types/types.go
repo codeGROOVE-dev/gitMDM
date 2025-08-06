@@ -11,6 +11,10 @@ type Device struct {
 	HardwareID string           `json:"hardware_id"`
 	Hostname   string           `json:"hostname"`
 	User       string           `json:"user"`
+	// In-memory only fields (not persisted to git)
+	SystemUptime  string `json:"-"`
+	CPULoad       string `json:"-"`
+	LoggedInUsers string `json:"-"`
 }
 
 // Check represents a single compliance check result.
@@ -24,9 +28,12 @@ type Check struct {
 
 // DeviceReport represents a compliance report sent by an agent.
 type DeviceReport struct {
-	Timestamp  time.Time        `json:"timestamp"`
-	Checks     map[string]Check `json:"checks"`
-	HardwareID string           `json:"hardware_id"`
-	Hostname   string           `json:"hostname"`
-	User       string           `json:"user"`
+	Timestamp     time.Time        `json:"timestamp"`
+	Checks        map[string]Check `json:"checks"`
+	HardwareID    string           `json:"hardware_id"`
+	Hostname      string           `json:"hostname"`
+	User          string           `json:"user"`
+	SystemUptime  string           `json:"system_uptime,omitempty"`
+	CPULoad       string           `json:"cpu_load,omitempty"`
+	LoggedInUsers string           `json:"logged_in_users,omitempty"`
 }

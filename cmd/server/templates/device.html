@@ -29,6 +29,9 @@
         <p><strong>User:</strong> {{.User}}</p>
         <p><strong>Last Check-in:</strong> {{formatTime .LastSeen}} ({{formatAgo .LastSeen}})</p>
         <p><strong>Last IP:</strong> {{if .LastIP}}{{.LastIP}}{{else}}N/A{{end}}</p>
+        {{if .SystemUptime}}<p><strong>System Uptime:</strong> {{.SystemUptime}}</p>{{end}}
+        {{if .CPULoad}}<p><strong>CPU Load:</strong> {{.CPULoad}}</p>{{end}}
+        {{if .LoggedInUsers}}<p><strong>Logged In Users:</strong> {{.LoggedInUsers}}</p>{{end}}
     </div>
 
     <h2>Compliance Checks</h2>

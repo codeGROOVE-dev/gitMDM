@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,8 +46,18 @@ func TestNewStore(t *testing.T) {
 	tempDir := t.TempDir()
 	localPath := filepath.Join(tempDir, "test-repo")
 
+	// Initialize git repo first
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = localPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init git repo: %v", err)
+	}
+
 	// Test local repository creation
-	store, err := New(ctx, localPath)
+	store, err := NewLocal(ctx, localPath)
 	if err != nil {
 		t.Fatalf("Failed to create local store: %v", err)
 	}
@@ -72,7 +83,17 @@ func TestSaveAndLoadDevice(t *testing.T) {
 	tempDir := t.TempDir()
 	localPath := filepath.Join(tempDir, "test-repo")
 
-	store, err := New(ctx, localPath)
+	// Initialize git repo first
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = localPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init git repo: %v", err)
+	}
+
+	store, err := NewLocal(ctx, localPath)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
@@ -153,7 +174,17 @@ func TestPathTraversalPrevention(t *testing.T) {
 	tempDir := t.TempDir()
 	localPath := filepath.Join(tempDir, "test-repo")
 
-	store, err := New(ctx, localPath)
+	// Initialize git repo first
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = localPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init git repo: %v", err)
+	}
+
+	store, err := NewLocal(ctx, localPath)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
@@ -197,7 +228,17 @@ func TestConcurrentSaves(t *testing.T) {
 	tempDir := t.TempDir()
 	localPath := filepath.Join(tempDir, "test-repo")
 
-	store, err := New(ctx, localPath)
+	// Initialize git repo first
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+	cmd := exec.Command("git", "init")
+	cmd.Dir = localPath
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to init git repo: %v", err)
+	}
+
+	store, err := NewLocal(ctx, localPath)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}

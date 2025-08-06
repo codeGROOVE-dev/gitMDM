@@ -155,12 +155,21 @@ func main() {
 
 func (a *Agent) reportToServer(ctx context.Context) {
 	start := time.Now()
+
+	// Collect system metrics (not persisted to git)
+	uptime := a.getSystemUptime(ctx)
+	cpuLoad := a.getCPULoad(ctx)
+	loggedInUsers := a.getLoggedInUsers(ctx)
+
 	report := types.DeviceReport{
-		HardwareID: a.hardwareID,
-		Hostname:   a.hostname,
-		User:       a.user,
-		Timestamp:  time.Now(),
-		Checks:     a.runAllChecks(ctx),
+		HardwareID:    a.hardwareID,
+		Hostname:      a.hostname,
+		User:          a.user,
+		Timestamp:     time.Now(),
+		Checks:        a.runAllChecks(ctx),
+		SystemUptime:  uptime,
+		CPULoad:       cpuLoad,
+		LoggedInUsers: loggedInUsers,
 	}
 
 	if *debug {
@@ -290,7 +299,7 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
 					break
 				}
 			}
-			
+
 			// Finally check for "all"
 			if !found {
 				if cmd, exists := checkCommands["all"]; exists {
@@ -355,7 +364,7 @@ func (a *Agent) runSingleCheck(checkName string) string {
 				break
 			}
 		}
-		
+
 		// Finally check for "all"
 		if !found {
 			if cmd, exists := checkCommands["all"]; exists {
@@ -391,96 +400,232 @@ func isValidCheckName(name string) bool {
 	return len(name) > 0 && len(name) <= 100
 }
 
-func hardwareID() string {
-	var id string
-	start := time.Now()
+func (a *Agent) getSystemUptime(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
+		cmd = exec.CommandContext(ctx, "uptime")
+	case "solaris", "illumos":
+		cmd = exec.CommandContext(ctx, "uptime")
+	case "windows":
+		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "lastbootuptime")
+	default:
+		return "unsupported"
+	}
+
+	if output, err := cmd.Output(); err == nil {
+		return strings.TrimSpace(string(output))
+	}
+	return "unavailable"
+}
+
+func (a *Agent) getCPULoad(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.CommandContext(ctx, "cat", "/proc/loadavg")
+	case "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
+		cmd = exec.CommandContext(ctx, "sysctl", "-n", "vm.loadavg")
+	case "solaris", "illumos":
+		cmd = exec.CommandContext(ctx, "uptime")
+	case "windows":
+		cmd = exec.CommandContext(ctx, "wmic", "cpu", "get", "loadpercentage")
+	default:
+		return "unsupported"
+	}
+
+	if output, err := cmd.Output(); err == nil {
+		result := strings.TrimSpace(string(output))
+		// For uptime output on Solaris, extract just the load average part
+		if (runtime.GOOS == "solaris" || runtime.GOOS == "illumos") && strings.Contains(result, "load average:") {
+			parts := strings.Split(result, "load average:")
+			if len(parts) > 1 {
+				result = strings.TrimSpace(parts[1])
+			}
+		}
+		return result
+	}
+	return "unavailable"
+}
+
+func (a *Agent) getLoggedInUsers(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "illumos":
+		cmd = exec.CommandContext(ctx, "who")
+	case "windows":
+		cmd = exec.CommandContext(ctx, "wmic", "computersystem", "get", "username")
+	default:
+		return "unsupported"
+	}
+
+	if output, err := cmd.Output(); err == nil {
+		result := strings.TrimSpace(string(output))
+		// Count unique users for Unix-like systems
+		if runtime.GOOS != "windows" {
+			lines := strings.Split(result, "\n")
+			userMap := make(map[string]bool)
+			for _, line := range lines {
+				fields := strings.Fields(line)
+				if len(fields) > 0 {
+					userMap[fields[0]] = true
+				}
+			}
+			users := make([]string, 0, len(userMap))
+			for user := range userMap {
+				users = append(users, user)
+			}
+			if len(users) > 0 {
+				return fmt.Sprintf("%d users: %s", len(users), strings.Join(users, ", "))
+			}
+			return "no users logged in"
+		}
+		return result
+	}
+	return "unavailable"
+}
+
+func getDarwinHardwareID() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+	output, err := cmd.Output()
+	if err != nil {
+		if *debug {
+			log.Printf("[DEBUG] Failed to get macOS hardware ID via ioreg: %v", err)
+		}
+		return ""
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "IOPlatformUUID") {
+			parts := strings.Split(line, "\"")
+			if len(parts) >= minUUIDParts {
+				id := parts[3]
+				if *debug {
+					log.Printf("[DEBUG] Found macOS hardware UUID: %s", id)
+				}
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+func getLinuxHardwareID() string {
+	data, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
+	if err == nil {
+		id := strings.TrimSpace(string(data))
+		if *debug {
+			log.Printf("[DEBUG] Found Linux hardware UUID from DMI: %s", id)
+		}
+		return id
+	}
+
+	data, err = os.ReadFile("/etc/machine-id")
+	if err == nil {
+		id := strings.TrimSpace(string(data))
+		if *debug {
+			log.Printf("[DEBUG] Found Linux machine ID: %s", id)
+		}
+		return id
+	}
+
+	if *debug {
+		log.Printf("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
+	}
+	return ""
+}
+
+func getBSDHardwareID() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
+	output, err := cmd.Output()
+	if err != nil {
+		if *debug {
+			log.Printf("[DEBUG] Failed to get BSD hardware ID via sysctl: %v", err)
+		}
+		return ""
+	}
+	id := strings.TrimSpace(string(output))
+	if *debug {
+		log.Printf("[DEBUG] Found BSD hardware UUID: %s", id)
+	}
+	return id
+}
+
+func getSolarisHardwareID() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "hostid")
+	output, err := cmd.Output()
+	if err != nil {
+		if *debug {
+			log.Printf("[DEBUG] Failed to get Solaris/illumos host ID: %v", err)
+		}
+		return ""
+	}
+	id := strings.TrimSpace(string(output))
+	if *debug {
+		log.Printf("[DEBUG] Found Solaris/illumos host ID: %s", id)
+	}
+	return id
+}
+
+func getWindowsHardwareID() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "UUID")
+	output, err := cmd.Output()
+	if err != nil {
+		if *debug {
+			log.Printf("[DEBUG] Failed to get Windows hardware ID via wmic: %v", err)
+		}
+		return ""
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && trimmed != "UUID" {
+			if *debug {
+				log.Printf("[DEBUG] Found Windows hardware UUID: %s", trimmed)
+			}
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func hardwareID() string {
+	start := time.Now()
 	if *debug {
 		log.Printf("[DEBUG] Detecting hardware ID for OS: %s", runtime.GOOS)
 	}
 
+	var id string
 	switch runtime.GOOS {
 	case "darwin":
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
-		output, err := cmd.Output()
-		if err == nil {
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				if strings.Contains(line, "IOPlatformUUID") {
-					parts := strings.Split(line, "\"")
-					if len(parts) >= minUUIDParts {
-						id = parts[3]
-						if *debug {
-							log.Printf("[DEBUG] Found macOS hardware UUID: %s", id)
-						}
-						break
-					}
-				}
-			}
-		} else if *debug {
-			log.Printf("[DEBUG] Failed to get macOS hardware ID via ioreg: %v", err)
-		}
+		id = getDarwinHardwareID()
 	case "linux":
-		if data, err := os.ReadFile("/sys/class/dmi/id/product_uuid"); err == nil {
-			id = strings.TrimSpace(string(data))
-			if *debug {
-				log.Printf("[DEBUG] Found Linux hardware UUID from DMI: %s", id)
-			}
-		} else if data, err := os.ReadFile("/etc/machine-id"); err == nil {
-			id = strings.TrimSpace(string(data))
-			if *debug {
-				log.Printf("[DEBUG] Found Linux machine ID: %s", id)
-			}
-		} else if *debug {
-			log.Printf("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
-		}
+		id = getLinuxHardwareID()
 	case "freebsd", "openbsd", "netbsd", "dragonfly":
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
-		if output, err := cmd.Output(); err == nil {
-			id = strings.TrimSpace(string(output))
-			if *debug {
-				log.Printf("[DEBUG] Found BSD hardware UUID: %s", id)
-			}
-		} else if *debug {
-			log.Printf("[DEBUG] Failed to get BSD hardware ID via sysctl: %v", err)
-		}
+		id = getBSDHardwareID()
 	case "solaris", "illumos":
-		// Try to get host ID from Solaris/illumos
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "hostid")
-		if output, err := cmd.Output(); err == nil {
-			id = strings.TrimSpace(string(output))
-			if *debug {
-				log.Printf("[DEBUG] Found Solaris/illumos host ID: %s", id)
-			}
-		} else if *debug {
-			log.Printf("[DEBUG] Failed to get Solaris/illumos host ID: %v", err)
-		}
+		id = getSolarisHardwareID()
 	case "windows":
-		// Get Windows machine GUID
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "UUID")
-		if output, err := cmd.Output(); err == nil {
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				if trimmed != "" && trimmed != "UUID" {
-					id = trimmed
-					if *debug {
-						log.Printf("[DEBUG] Found Windows hardware UUID: %s", id)
-					}
-					break
-				}
-			}
-		} else if *debug {
-			log.Printf("[DEBUG] Failed to get Windows hardware ID via wmic: %v", err)
-		}
+		id = getWindowsHardwareID()
 	default:
 		if *debug {
 			log.Printf("[DEBUG] Unsupported OS for hardware ID detection: %s", runtime.GOOS)

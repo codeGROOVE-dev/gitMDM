@@ -23,7 +23,7 @@ checks:
     openbsd: bioctl -i softraid0  || echo "No encrypted volumes"
     netbsd: cgdconfig -l  || echo "CGD not configured"
     solaris,illumos: zpool status | grep -E "state:|ONLINE" || echo "ZFS encryption status unknown"
-    windows: manage-bde -status C: | findstr /i "protection status conversion"
+    windows: 'manage-bde -status C: | findstr /i "protection status conversion"'
 
   firewall:
     linux: iptables -L -n  | grep -E "^Chain|policy" || echo "Firewall not accessible"

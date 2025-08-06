@@ -398,6 +398,10 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		LastSeen:   now,
 		LastIP:     clientIP,
 		Checks:     report.Checks,
+		// In-memory only fields
+		SystemUptime:  report.SystemUptime,
+		CPULoad:       report.CPULoad,
+		LoggedInUsers: report.LoggedInUsers,
 	}
 
 	// Always update in-memory cache first for immediate availability

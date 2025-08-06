@@ -34,9 +34,21 @@ Proves compliance without control:
 - System updates
 - Screensaver locks
 
-## Platform Support
+## Cross Platform
 
-Linux, macOS, FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, Solaris, illumos, Windows 11
+We currently support:
+
+* Linux
+* macOS
+* FreeBSD
+* OpenBSD
+* NetBSD
+* DragonFlyBSD
+* Solaris
+* illumos
+* Windows 11
+
+gitMDM supports any architecture supported by the Go programming language: from riscv to ppc64.
 
 ## Installation
 

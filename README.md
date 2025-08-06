@@ -6,7 +6,7 @@
 
 ## What
 
-A "Mobile Device Management" solution that stores compliance checks in Git. Built to pass SOC 2 audits without installing actual MDM spyware.
+A "Mobile Device Management" solution that stores compliance data in Git. Built to pass SOC 2 without requiring a highly privileged RCE
 
 ## Why
 
@@ -15,7 +15,7 @@ Because real MDMs are backdoors with compliance features. This just generates th
 ## Philosophy
 
 - **Can't manage devices** - Only reports on them
-- **Can't execute commands** - Read-only by design  
+- **Can't execute commands** - Read-only by design
 - **Can't phone home** - Your Git repo, your control
 - **Can't compromise systems** - No privileges, no access
 
@@ -71,7 +71,7 @@ Edit `checks.yaml` to define compliance checks. Default config satisfies most au
 
 ## Security
 
-Traditional MDMs: Give someone your house keys to check if the door is locked.  
+Traditional MDMs: Give someone your house keys to check if the door is locked.
 gitMDM: Someone photographs your locked door from across the street.
 
 **Result**: Compliance without compromise.

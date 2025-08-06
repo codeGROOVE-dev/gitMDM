@@ -18,13 +18,14 @@ gitMDM proves compliance without compromising security:
 
 ## Screenshots
 
-**Dashboard: Compliance at a glance**
+### Device List
 <a href="media/dashboard.png"><img src="media/dashboard.png" alt="Dashboard" width="400"/></a>
 
-**Agent Report: Detailed results**
+### Device Details
+
 <a href="media/report.png"><img src="media/report.png" alt="Agent Report" width="400"/></a>
 
-**Remediation: Plain-English guidance**
+### Remediation
 <a href="media/remediate.png"><img src="media/remediate.png" alt="Remediation Steps" width="400"/></a>
 
 ## How It Works
@@ -42,7 +43,7 @@ The server **cannot** push commands. Ever. That's the point.
 # Server
 ./out/gitmdm-server -git git@github.com:org/compliance.git -api-key SECRET
 
-# Agent  
+# Agent
 ./out/gitmdm-agent -server https://server:8080
 ```
 

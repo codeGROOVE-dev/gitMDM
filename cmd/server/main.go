@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"gitmdm/internal/gitmdm"
 	"gitmdm/internal/gitstore"
+	"gitmdm/internal/viewmodels"
 	"html/template"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,23 +58,32 @@ var (
 	apiKey = flag.String("api-key", "", "API key for authentication (optional but recommended)")
 )
 
+// ComplianceCache stores pre-calculated compliance stats for a device.
+type ComplianceCache struct {
+	PassCount int
+	FailCount int
+	NACount   int
+}
+
 // Server represents the gitMDM server that receives and stores compliance reports.
 type Server struct {
-	store         *gitstore.Store
-	tmpl          *template.Template
-	devices       map[string]*gitmdm.Device
-	failedReports chan *gitmdm.Device
-	mu            sync.RWMutex
-	healthMu      sync.RWMutex
-	statsmu       sync.RWMutex
-	requestCount  int64
-	errorCount    int64
-	healthy       bool
+	store           *gitstore.Store
+	tmpl            *template.Template
+	devices         map[string]*gitmdm.Device
+	complianceCache map[string]*ComplianceCache // Cache compliance stats per device
+	failedReports   chan *gitmdm.Device
+	mu              sync.RWMutex
+	healthMu        sync.RWMutex
+	statsmu         sync.RWMutex
+	requestCount    int64
+	errorCount      int64
+	healthy         bool
 }
 
 func main() {
 	flag.Parse()
 
+	// Validate flags
 	if *gitURL == "" && *clone == "" {
 		log.Fatal("Either -git (repository to clone) or -clone (existing local clone) is required")
 	}
@@ -81,78 +92,66 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	var store *gitstore.Store
-	var err error
-
-	if *clone != "" {
-		// Use existing local clone directly (no push/pull)
-		store, err = gitstore.NewLocal(ctx, *clone)
-	} else {
-		// Clone repository to temp directory (with push/pull)
-		store, err = gitstore.NewRemote(ctx, *gitURL)
-	}
-
-	if err != nil {
-		cancel() // Cancel context before fatal exit
-		log.Fatalf("[ERROR] Failed to initialize git store: %v", err)
-	}
 	defer cancel()
 
-	// Create template with helper functions
+	// Initialize git store
+	var store *gitstore.Store
+	var err error
+	if *clone != "" {
+		store, err = gitstore.NewLocal(ctx, *clone)
+	} else {
+		store, err = gitstore.NewRemote(ctx, *gitURL)
+	}
+	if err != nil {
+		cancel()
+		log.Fatalf("[ERROR] Failed to initialize git store: %v", err)
+	}
+
+	// Create server
 	funcMap := template.FuncMap{
-		"formatTime": func(t time.Time) string {
-			if t.IsZero() {
-				return "N/A"
-			}
-			return t.Format("2006-01-02 15:04:05")
+		"formatTime":    formatTimeFunc,
+		"formatAgo":     formatAgoFunc,
+		"inc":           func(i int) int { return i + 1 },
+		"truncateLines": truncateLinesFunc,
+		"safeID":        func(name string) string {
+			return strings.ReplaceAll(strings.ReplaceAll(name, "_", "-"), ".", "-")
 		},
-		"formatAgo": func(t time.Time) string {
-			if t.IsZero() {
-				return "never"
-			}
-			dur := time.Since(t).Round(time.Second)
-			if dur < time.Minute {
-				return fmt.Sprintf("%d seconds ago", int(dur.Seconds()))
-			}
-			if dur < time.Hour {
-				return fmt.Sprintf("%d minutes ago", int(dur.Minutes()))
-			}
-			if dur < 24*time.Hour {
-				return fmt.Sprintf("%d hours ago", int(dur.Hours()))
-			}
-			return fmt.Sprintf("%d days ago", int(dur.Hours()/24))
-		},
+		"add":           addFunc,
+		"mul":           mulFunc,
+		"div":           divFunc,
+		"title":         titleFunc,
+		"sub":           func(a, b int) int { return a - b },
 	}
-
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "templates/*.html"))
-
+	
 	server := &Server{
-		store:         store,
-		devices:       make(map[string]*gitmdm.Device),
-		tmpl:          tmpl,
-		failedReports: make(chan *gitmdm.Device, failedReportsQueueSize),
-		healthy:       true,
+		store:           store,
+		devices:         make(map[string]*gitmdm.Device),
+		complianceCache: make(map[string]*ComplianceCache),
+		tmpl:            tmpl,
+		failedReports:   make(chan *gitmdm.Device, failedReportsQueueSize),
+		healthy:         true,
 	}
 
+	// Load existing devices
 	if err := server.loadDevices(ctx); err != nil {
 		log.Printf("[WARN] Failed to load existing devices: %v", err)
 	}
 
-	// Start failed reports processor
+	// Start background processors
 	go server.processFailedReports(ctx)
 
-	// Log security configuration
+	// Log configuration
 	if *apiKey != "" {
 		log.Println("[INFO] API key authentication enabled")
 	} else {
 		log.Println("[WARN] Running without API key authentication")
 	}
-
 	log.Printf("[INFO] Retry configuration: max_retries=%d, initial_backoff=%v, max_backoff=%v",
 		maxRetries, initialBackoff, maxBackoff)
 	log.Printf("[INFO] Failed reports queue size: %d", failedReportsQueueSize)
 
+	// Create and start HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", server.handleIndex)
 	mux.HandleFunc("/device/", server.handleDevice)
@@ -176,10 +175,12 @@ func main() {
 		}
 	}()
 
+	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 
+	// Graceful shutdown
 	log.Println("[INFO] Shutting down server...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer shutdownCancel()
@@ -189,6 +190,115 @@ func main() {
 	} else {
 		log.Println("[INFO] Server shutdown complete")
 	}
+}
+
+
+// Template function implementations
+
+func formatTimeFunc(t time.Time) string {
+	if t.IsZero() {
+		return "N/A"
+	}
+	return t.Format("2006-01-02 15:04:05")
+}
+
+func formatAgoFunc(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	dur := time.Since(t).Round(time.Second)
+	if dur < time.Minute {
+		return fmt.Sprintf("%d seconds ago", int(dur.Seconds()))
+	}
+	if dur < time.Hour {
+		return fmt.Sprintf("%d minutes ago", int(dur.Minutes()))
+	}
+	if dur < 24*time.Hour {
+		return fmt.Sprintf("%d hours ago", int(dur.Hours()))
+	}
+	return fmt.Sprintf("%d days ago", int(dur.Hours()/24))
+}
+
+func truncateLinesFunc(text string, maxLines any) string {
+	if text == "" {
+		return text
+	}
+
+	var maxLinesInt int
+	switch v := maxLines.(type) {
+	case int:
+		maxLinesInt = v
+	case float64:
+		maxLinesInt = int(v)
+	default:
+		maxLinesInt = 100 // default fallback
+	}
+
+	lines := strings.Split(text, "\n")
+	if len(lines) <= maxLinesInt {
+		return text
+	}
+	truncated := strings.Join(lines[:maxLinesInt], "\n")
+	return truncated + "\n... (output truncated, showing first " + strconv.Itoa(maxLinesInt) + " lines)"
+}
+
+func addFunc(a, b any) any {
+	switch av := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok {
+			return av + bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			return av + bv
+		}
+	}
+	return 0
+}
+
+func mulFunc(a, b any) any {
+	switch av := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok {
+			return av * bv
+		}
+		if bv, ok := b.(float64); ok {
+			return float64(av) * bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			return av * bv
+		}
+		if bv, ok := b.(int); ok {
+			return av * float64(bv)
+		}
+	}
+	return 0
+}
+
+func divFunc(a, b any) any {
+	switch av := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok && bv != 0 {
+			return av / bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok && bv != 0 {
+			return av / bv
+		}
+	}
+	return 0
+}
+
+func titleFunc(s string) string {
+	// Replace underscores with spaces and title case each word
+	words := strings.Split(strings.ReplaceAll(s, "_", " "), " ")
+	for i, word := range words {
+		if word != "" {
+			words[i] = strings.ToUpper(word[:1]) + strings.ToLower(word[1:])
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func (s *Server) loadDevices(ctx context.Context) error {
@@ -203,10 +313,39 @@ func (s *Server) loadDevices(ctx context.Context) error {
 
 	for _, device := range devices {
 		s.devices[device.HardwareID] = device
+		// Calculate and cache compliance stats
+		s.updateComplianceCacheLocked(device)
 	}
 
 	log.Printf("[INFO] Loaded %d devices from git repository in %v", len(devices), time.Since(start))
 	return nil
+}
+
+// updateComplianceCacheLocked updates the compliance cache for a device.
+// Caller must hold s.mu lock.
+func (s *Server) updateComplianceCacheLocked(device *gitmdm.Device) {
+	cache := &ComplianceCache{}
+
+	// Filter out checks that are more than 1 hour older than LastSeen
+	staleThreshold := device.LastSeen.Add(-1 * time.Hour)
+
+	for _, check := range device.Checks {
+		// Skip stale checks that are too old
+		if !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
+			continue
+		}
+
+		switch check.Status {
+		case "pass":
+			cache.PassCount++
+		case "fail":
+			cache.FailCount++
+		default: // "n/a" or empty
+			cache.NACount++
+		}
+	}
+
+	s.complianceCache[device.HardwareID] = cache
 }
 
 func (s *Server) processFailedReports(ctx context.Context) {
@@ -218,39 +357,34 @@ func (s *Server) processFailedReports(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.processQueuedDevices(ctx)
-		}
-	}
-}
+			// Process all queued devices
+			for {
+				select {
+				case device := <-s.failedReports:
+					// Retry failed device inline
+					log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
+					err := retry.Do(func() error {
+						return s.store.SaveDevice(ctx, device)
+					}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 
-func (s *Server) processQueuedDevices(ctx context.Context) {
-	for {
-		select {
-		case device := <-s.failedReports:
-			s.retryFailedDevice(ctx, device)
-		default:
-			// No more reports to process
-			return
+					if err != nil {
+						log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
+						// Re-queue if there's space, otherwise drop
+						select {
+						case s.failedReports <- device:
+						default:
+							log.Print("[WARN] Dropping failed device report - queue full")
+						}
+					} else {
+						log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
+					}
+				default:
+					// No more reports to process
+					goto nextTick
+				}
+			}
+		nextTick:
 		}
-	}
-}
-
-func (s *Server) retryFailedDevice(ctx context.Context, device *gitmdm.Device) {
-	log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
-	err := retry.Do(func() error {
-		return s.store.SaveDevice(ctx, device)
-	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
-	if err != nil {
-		log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
-		// Re-queue if there's space, otherwise drop
-		select {
-		case s.failedReports <- device:
-		default:
-			log.Print("[WARN] Dropping failed device report - queue full")
-		}
-	} else {
-		log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
 	}
 }
 
@@ -263,15 +397,140 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get filter parameters
+	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
+	status := r.URL.Query().Get("status")
+
+	// Get pagination parameters
+	page := 1
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	const itemsPerPage = 50
+
 	s.mu.RLock()
-	devices := make([]*gitmdm.Device, 0, len(s.devices))
-	for _, d := range s.devices {
-		devices = append(devices, d)
+	// Build view models using cached compliance data
+	allDevices := make([]viewmodels.DeviceListItem, 0, len(s.devices))
+
+	for _, device := range s.devices {
+		// Extract OS and version information
+		osName, osVersion := viewmodels.ExtractOSInfo(device)
+
+		item := viewmodels.DeviceListItem{
+			HardwareID: device.HardwareID,
+			Hostname:   device.Hostname,
+			User:       device.User,
+			OS:         osName,
+			Version:    osVersion,
+			LastSeen:   device.LastSeen,
+		}
+
+		// Use cached compliance stats
+		if cache, exists := s.complianceCache[device.HardwareID]; exists {
+			item.PassCount = cache.PassCount
+			item.FailCount = cache.FailCount
+			item.NACount = cache.NACount
+
+			// Calculate compliance score and emoji
+			if item.PassCount+item.FailCount > 0 {
+				item.ComplianceScore = float64(item.PassCount) / float64(item.PassCount+item.FailCount)
+
+				if item.ComplianceScore >= 0.9 {
+					item.ComplianceEmoji = "🏆" // Excellent
+					item.ComplianceClass = "excellent"
+				} else if item.ComplianceScore >= 0.7 {
+					item.ComplianceEmoji = "👍" // Good
+					item.ComplianceClass = "good"
+				} else if item.ComplianceScore >= 0.5 {
+					item.ComplianceEmoji = "😐" // Meh
+					item.ComplianceClass = "fair"
+				} else {
+					item.ComplianceEmoji = "🔥" // This is fine
+					item.ComplianceClass = "poor"
+				}
+			} else {
+				item.ComplianceClass = "poor"
+			}
+		} else {
+			item.ComplianceClass = "poor"
+		}
+
+		// Apply search filter
+		if search != "" {
+			if !strings.Contains(strings.ToLower(item.Hostname), search) &&
+				!strings.Contains(strings.ToLower(item.User), search) {
+				continue
+			}
+		}
+
+		// Apply status filter
+		if status != "" {
+			switch status {
+			case "excellent":
+				if item.ComplianceClass != "excellent" {
+					continue
+				}
+			case "good":
+				if item.ComplianceClass != "good" {
+					continue
+				}
+			case "issues":
+				if item.ComplianceClass != "poor" && item.ComplianceClass != "fair" {
+					continue
+				}
+			case "checking":
+				if item.ComplianceScore > 0 {
+					continue
+				}
+			}
+		}
+
+		allDevices = append(allDevices, item)
 	}
 	s.mu.RUnlock()
 
+	// Apply pagination
+	totalDevices := len(allDevices)
+	totalPages := (totalDevices + itemsPerPage - 1) / itemsPerPage
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	// Adjust page if out of bounds
+	if page > totalPages {
+		page = totalPages
+	}
+
+	// Calculate pagination slice
+	start := (page - 1) * itemsPerPage
+	end := start + itemsPerPage
+	if end > totalDevices {
+		end = totalDevices
+	}
+
+	var pagedDevices []viewmodels.DeviceListItem
+	if start < totalDevices {
+		pagedDevices = allDevices[start:end]
+	} else {
+		pagedDevices = []viewmodels.DeviceListItem{}
+	}
+
+	// Create view model with filter state
+	viewModel := viewmodels.DeviceListView{
+		Devices:     pagedDevices,
+		Search:      r.URL.Query().Get("search"), // Keep original case for display
+		Status:      status,
+		Page:        page,
+		TotalPages:  totalPages,
+		Total:       totalDevices,
+		HasPrevious: page > 1,
+		HasNext:     page < totalPages,
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "index.html", devices); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "index.html", viewModel); err != nil {
 		s.incrementErrorCount()
 		log.Printf("[ERROR] Template error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -305,8 +564,11 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build detailed view model with compliance analysis
+	viewData := viewmodels.BuildDeviceDetail(device)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "device.html", device); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "device.html", viewData); err != nil {
 		s.incrementErrorCount()
 		log.Printf("[ERROR] Template error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -326,7 +588,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 
 	// Security: Check API key if configured
 	if *apiKey != "" {
-		providedKey := request.Header.Get("X-API-Key")
+		providedKey := request.Header.Get("X-Api-Key")
 		// Security: Don't accept API key from query params (exposes in logs)
 		// Use constant-time comparison to prevent timing attacks
 		if len(providedKey) != len(*apiKey) || subtle.ConstantTimeCompare([]byte(providedKey), []byte(*apiKey)) != 1 {
@@ -357,7 +619,18 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	// Additional validation: only allow safe characters in hardware ID
-	if !isValidHardwareID(report.HardwareID) {
+	// Allow alphanumeric, hyphens, underscores, and dots (common in UUIDs and machine IDs)
+	isValid := true
+	for _, r := range report.HardwareID {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '-' && r != '_' && r != '.' {
+			isValid = false
+			break
+		}
+	}
+	if !isValid {
 		s.incrementErrorCount()
 		log.Printf("[WARN] Invalid Hardware ID format from %s", request.RemoteAddr)
 		http.Error(writer, "Invalid Hardware ID format", http.StatusBadRequest)
@@ -385,18 +658,21 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 			return
 		}
 		// Additional validation: only allow safe characters in check names
-		if !isValidCheckName(name) {
+		if !gitmdm.IsValidCheckName(name) {
 			s.incrementErrorCount()
 			log.Printf("[WARN] Invalid check name format from %s", request.RemoteAddr)
 			http.Error(writer, "Invalid check name format", http.StatusBadRequest)
 			return
 		}
-		// Check combined output size (stdout + stderr)
-		totalOutput := len(check.Stdout) + len(check.Stderr)
+		// Check combined output size for all command outputs
+		totalOutput := 0
+		for _, output := range check.Outputs {
+			totalOutput += len(output.Stdout) + len(output.Stderr)
+		}
 		if totalOutput > maxCheckOutput {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check output too large from %s: %s (stdout: %d, stderr: %d, total: %d bytes)",
-				request.RemoteAddr, name, len(check.Stdout), len(check.Stderr), totalOutput)
+			log.Printf("[WARN] Check output too large from %s: %s (%d commands, total: %d bytes)",
+				request.RemoteAddr, name, len(check.Outputs), totalOutput)
 			http.Error(writer, "Check output too large", http.StatusBadRequest)
 			return
 		}
@@ -430,6 +706,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	// Always update in-memory cache first for immediate availability
 	s.mu.Lock()
 	s.devices[device.HardwareID] = device
+	// Update compliance cache
+	s.updateComplianceCacheLocked(device)
 	s.mu.Unlock()
 
 	log.Printf("[INFO] Received report from %s (device: %s, checks: %d) in %v",
@@ -447,7 +725,13 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 			log.Printf("[INFO] Device %s queued for retry processing", device.HardwareID)
 		default:
 			log.Printf("[WARN] Failed reports queue is full, device %s will not be retried", device.HardwareID)
-			s.setHealthy(false)
+			// Set health status to degraded inline
+			s.healthMu.Lock()
+			if s.healthy {
+				s.healthy = false
+				log.Print("[WARN] Server health status changed to degraded")
+			}
+			s.healthMu.Unlock()
 		}
 		// Continue processing - don't fail the request due to storage issues
 	}
@@ -525,7 +809,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'")
 
 		start := time.Now()
 		next.ServeHTTP(w, r)
@@ -551,44 +835,4 @@ func (s *Server) incrementErrorCount() {
 	s.statsmu.Lock()
 	s.errorCount++
 	s.statsmu.Unlock()
-}
-
-func (s *Server) setHealthy(healthy bool) {
-	s.healthMu.Lock()
-	s.healthy = healthy
-	s.healthMu.Unlock()
-
-	if !healthy {
-		log.Print("[WARN] Server health status changed to degraded")
-	} else {
-		log.Print("[INFO] Server health status changed to healthy")
-	}
-}
-
-// isValidHardwareID validates that a hardware ID contains only safe characters.
-func isValidHardwareID(id string) bool {
-	// Allow alphanumeric, hyphens, underscores, and dots (common in UUIDs and machine IDs)
-	for _, r := range id {
-		if (r < 'a' || r > 'z') &&
-			(r < 'A' || r > 'Z') &&
-			(r < '0' || r > '9') &&
-			r != '-' && r != '_' && r != '.' {
-			return false
-		}
-	}
-	return id != ""
-}
-
-// isValidCheckName validates that a check name contains only safe characters.
-func isValidCheckName(name string) bool {
-	// Allow alphanumeric, hyphens, and underscores only
-	for _, r := range name {
-		if (r < 'a' || r > 'z') &&
-			(r < 'A' || r > 'Z') &&
-			(r < '0' || r > '9') &&
-			r != '-' && r != '_' {
-			return false
-		}
-	}
-	return name != ""
 }

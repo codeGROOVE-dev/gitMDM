@@ -14,10 +14,16 @@ func TestDeviceSerialization(t *testing.T) {
 		LastSeen:   time.Now(),
 		Checks: map[string]Check{
 			"test": {
-				Command:  "echo test",
-				Stdout:   "test output",
-				Stderr:   "",
-				ExitCode: 0,
+				Outputs: []CommandOutput{
+					{
+						Command:  "echo test",
+						Stdout:   "test output",
+						Stderr:   "",
+						ExitCode: 0,
+					},
+				},
+				Status: "pass",
+				Reason: "Test passed",
 			},
 		},
 	}

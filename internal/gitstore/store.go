@@ -112,13 +112,6 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 	return s, nil
 }
 
-// New creates a new git store (deprecated: use NewLocal or NewRemote instead).
-// Deprecated: Use NewLocal or NewRemote instead.
-func New(ctx context.Context, gitURL string) (*Store, error) {
-	// For backward compatibility, treat as remote
-	return NewRemote(ctx, gitURL)
-}
-
 func (s *Store) initializeRemote(ctx context.Context) error {
 	start := time.Now()
 	s.mu.Lock()
@@ -126,14 +119,22 @@ func (s *Store) initializeRemote(ctx context.Context) error {
 
 	log.Printf("[INFO] Cloning repository: %s to %s", s.gitURL, s.repoPath)
 
-	if err := s.runGitCommandInDirWithRetry(ctx, "", "clone", s.gitURL, s.repoPath); err != nil {
+	// Clone repository with retries
+	if err := retry.Do(func() error {
+		return s.runGitCommandInDir(ctx, "", "clone", s.gitURL, s.repoPath)
+	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
-	if err := s.runGitCommandInDirWithRetry(ctx, s.repoPath, "config", "user.email", "gitmdm@localhost"); err != nil {
+	// Configure git user
+	if err := retry.Do(func() error {
+		return s.runGitCommandInDir(ctx, s.repoPath, "config", "user.email", "gitmdm@localhost")
+	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 		return err
 	}
-	if err := s.runGitCommandInDirWithRetry(ctx, s.repoPath, "config", "user.name", "gitMDM"); err != nil {
+	if err := retry.Do(func() error {
+		return s.runGitCommandInDir(ctx, s.repoPath, "config", "user.name", "gitMDM")
+	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 		return err
 	}
 
@@ -250,8 +251,12 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 				continue
 			}
 			// Log what's being saved
-			log.Printf("[DEBUG] Updated %s: stdout=%d bytes, stderr=%d bytes, exit=%d",
-				checkPath, len(check.Stdout), len(check.Stderr), check.ExitCode)
+			outputSizes := 0
+			for _, output := range check.Outputs {
+				outputSizes += len(output.Stdout) + len(output.Stderr)
+			}
+			log.Printf("[DEBUG] Updated %s: %d commands, %d bytes total output",
+				checkPath, len(check.Outputs), outputSizes)
 		}
 	}
 
@@ -348,12 +353,82 @@ func (s *Store) ListDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 			continue
 		}
 
-		device, err := s.loadDevice(ctx, entry.Name())
+		// Load device inline
+		dirName := entry.Name()
+		deviceDir := filepath.Join(s.repoPath, "devices", dirName)
+
+		infoPath := filepath.Join(deviceDir, "info.json")
+		infoData, err := os.ReadFile(infoPath)
 		if err != nil {
 			failedCount++
-			log.Printf("[WARN] Failed to load device %s: %v", entry.Name(), err)
+			log.Printf("[WARN] Failed to read device info for %s: %v", dirName, err)
 			continue
 		}
+
+		var info struct {
+			HardwareID string    `json:"hardware_id"`
+			Hostname   string    `json:"hostname"`
+			User       string    `json:"user"`
+			LastSeen   time.Time `json:"last_seen"`
+			LastIP     string    `json:"last_ip"`
+		}
+		if err := json.Unmarshal(infoData, &info); err != nil {
+			failedCount++
+			log.Printf("[WARN] Failed to unmarshal device info for %s: %v", dirName, err)
+			continue
+		}
+
+		device := &gitmdm.Device{
+			HardwareID: info.HardwareID,
+			Hostname:   info.Hostname,
+			User:       info.User,
+			LastSeen:   info.LastSeen,
+			LastIP:     info.LastIP,
+			Checks:     make(map[string]gitmdm.Check),
+		}
+
+		// Load check files
+		checkEntries, err := os.ReadDir(deviceDir)
+		if err != nil {
+			devices = append(devices, device)
+			continue
+		}
+
+		for _, checkEntry := range checkEntries {
+			if checkEntry.IsDir() || !strings.HasSuffix(checkEntry.Name(), ".json") {
+				continue
+			}
+
+			// Skip loading info.json as check (already loaded above)
+			if checkEntry.Name() == "info.json" {
+				continue
+			}
+
+			filePath := filepath.Join(deviceDir, checkEntry.Name())
+
+			checkName := strings.TrimSuffix(checkEntry.Name(), ".json")
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				log.Printf("Failed to read check %s: %v", checkName, err)
+				continue
+			}
+
+			var check gitmdm.Check
+			if err := json.Unmarshal(content, &check); err != nil {
+				log.Printf("Failed to unmarshal check %s: %v", checkName, err)
+				continue
+			}
+
+			// Set timestamp from file modification time
+			if stat, err := os.Stat(filePath); err == nil {
+				check.Timestamp = stat.ModTime()
+			} else {
+				log.Printf("[WARN] Failed to get file modification time for %s: %v", filePath, err)
+			}
+
+			device.Checks[checkName] = check
+		}
+
 		devices = append(devices, device)
 	}
 
@@ -361,83 +436,6 @@ func (s *Store) ListDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 		len(devices), failedCount, time.Since(start))
 
 	return devices, nil
-}
-
-func (s *Store) loadDevice(_ context.Context, dirName string) (*gitmdm.Device, error) {
-	deviceDir := filepath.Join(s.repoPath, "devices", dirName)
-
-	infoPath := filepath.Join(deviceDir, "info.json")
-	infoData, err := os.ReadFile(infoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read device info: %w", err)
-	}
-
-	var info struct {
-		HardwareID string    `json:"hardware_id"`
-		Hostname   string    `json:"hostname"`
-		User       string    `json:"user"`
-		LastSeen   time.Time `json:"last_seen"`
-		LastIP     string    `json:"last_ip"`
-	}
-	if err := json.Unmarshal(infoData, &info); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal device info: %w", err)
-	}
-
-	device := &gitmdm.Device{
-		HardwareID: info.HardwareID,
-		Hostname:   info.Hostname,
-		User:       info.User,
-		LastSeen:   info.LastSeen,
-		LastIP:     info.LastIP,
-		Checks:     make(map[string]gitmdm.Check),
-	}
-
-	// Load check files
-	entries, err := os.ReadDir(deviceDir)
-	if err != nil {
-		return device, err
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		// Skip loading info.json as check (already loaded above)
-		if entry.Name() == "info.json" {
-			continue
-		}
-
-		filePath := filepath.Join(deviceDir, entry.Name())
-
-		checkName := strings.TrimSuffix(entry.Name(), ".json")
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			log.Printf("Failed to read check %s: %v", checkName, err)
-			continue
-		}
-
-		var check gitmdm.Check
-		if err := json.Unmarshal(content, &check); err != nil {
-			log.Printf("Failed to unmarshal check %s: %v", checkName, err)
-			continue
-		}
-
-		// Set timestamp from file modification time
-		if stat, err := os.Stat(filePath); err == nil {
-			check.Timestamp = stat.ModTime()
-		}
-
-		device.Checks[checkName] = check
-	}
-
-	return device, nil
-}
-
-func (s *Store) runGitCommandInDirWithRetry(ctx context.Context, dir string, args ...string) error {
-	return retry.Do(func() error {
-		return s.runGitCommandInDir(ctx, dir, args...)
-	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 }
 
 func (*Store) runGitCommandInDir(ctx context.Context, dir string, args ...string) error {

@@ -105,16 +105,28 @@ func TestSaveAndLoadDevice(t *testing.T) {
 		LastSeen:   time.Now(),
 		Checks: map[string]gitmdm.Check{
 			"hostname": {
-				Command:  "hostname",
-				Stdout:   "test-host.local",
-				Stderr:   "",
-				ExitCode: 0,
+				Outputs: []gitmdm.CommandOutput{
+					{
+						Command:  "hostname",
+						Stdout:   "test-host.local",
+						Stderr:   "",
+						ExitCode: 0,
+					},
+				},
+				Status: "n/a",
+				Reason: "Informational",
 			},
 			"uname": {
-				Command:  "uname -a",
-				Stdout:   "Linux test-host 5.10.0",
-				Stderr:   "",
-				ExitCode: 0,
+				Outputs: []gitmdm.CommandOutput{
+					{
+						Command:  "uname -a",
+						Stdout:   "Linux test-host 5.10.0",
+						Stderr:   "",
+						ExitCode: 0,
+					},
+				},
+				Status: "n/a",
+				Reason: "Informational",
 			},
 		},
 	}
@@ -156,14 +168,24 @@ func TestSaveAndLoadDevice(t *testing.T) {
 			t.Errorf("Check %s not found in loaded device", name)
 			continue
 		}
-		if loadedCheck.Command != check.Command {
-			t.Errorf("Check %s command mismatch: got %s, want %s", name, loadedCheck.Command, check.Command)
+		if len(loadedCheck.Outputs) != len(check.Outputs) {
+			t.Errorf("Check %s outputs count mismatch: got %d, want %d", name, len(loadedCheck.Outputs), len(check.Outputs))
+			continue
 		}
-		if loadedCheck.Stdout != check.Stdout {
-			t.Errorf("Check %s stdout mismatch: got %s, want %s", name, loadedCheck.Stdout, check.Stdout)
-		}
-		if loadedCheck.ExitCode != check.ExitCode {
-			t.Errorf("Check %s exit code mismatch: got %d, want %d", name, loadedCheck.ExitCode, check.ExitCode)
+		for i, output := range check.Outputs {
+			if i >= len(loadedCheck.Outputs) {
+				break
+			}
+			loadedOutput := loadedCheck.Outputs[i]
+			if loadedOutput.Command != output.Command {
+				t.Errorf("Check %s output %d command mismatch: got %s, want %s", name, i, loadedOutput.Command, output.Command)
+			}
+			if loadedOutput.Stdout != output.Stdout {
+				t.Errorf("Check %s output %d stdout mismatch: got %s, want %s", name, i, loadedOutput.Stdout, output.Stdout)
+			}
+			if loadedOutput.ExitCode != output.ExitCode {
+				t.Errorf("Check %s output %d exit code mismatch: got %d, want %d", name, i, loadedOutput.ExitCode, output.ExitCode)
+			}
 		}
 	}
 }
@@ -196,10 +218,16 @@ func TestPathTraversalPrevention(t *testing.T) {
 		LastSeen:   time.Now(),
 		Checks: map[string]gitmdm.Check{
 			"../../../evil": {
-				Command:  "evil command",
-				Stdout:   "evil output",
-				Stderr:   "",
-				ExitCode: 0,
+				Outputs: []gitmdm.CommandOutput{
+					{
+						Command:  "evil command",
+						Stdout:   "evil output",
+						Stderr:   "",
+						ExitCode: 0,
+					},
+				},
+				Status: "fail",
+				Reason: "Evil detected",
 			},
 		},
 	}

@@ -1,82 +1,307 @@
+# gitMDM Compliance Checks Configuration
+# Commands use simple names without paths - we set a secure PATH in the agent
+# This prevents PATH-based attacks while working with bash restricted mode
+# Each check can have OS-specific commands and remediation steps
+
 checks:
   hostname:
-    all: hostname
+    commands:
+      all:
+        - hostname
 
   uname:
-    linux,darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: uname -a
-    windows: ver
+    commands:
+      linux,darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos:
+        - uname -a
+      windows:
+        - cmd.exe /c ver
 
   users:
-    linux,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: cat /etc/passwd
-    darwin: dscl . -list /Users | grep -v ^_
-    windows: net user
+    commands:
+      linux,freebsd,openbsd,netbsd,dragonfly,solaris,illumos:
+        - cat /etc/passwd
+      darwin:
+        - dscl . -list /Users | grep -Ev "^(_.*|daemon|nobody|root)\$"
+      windows:
+        - net.exe user
 
   network:
-    linux: ip addr show  | grep -E "^[0-9]+:|inet " | grep -v "127.0.0.1"
-    darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
-    windows: ipconfig /all | findstr /i "adapter ipv4 ipv6"
+    commands:
+      linux:
+        - ip addr show
+      darwin,freebsd,openbsd,netbsd,dragonfly:
+        - ifconfig -a
+      solaris,illumos:
+        - ifconfig -a
+      windows:
+        - ipconfig.exe /all
 
-  diskencryption:
-    linux: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE  | grep -v loop
-    darwin: diskutil info / | grep -E "(Encrypted|FileVault|Encryption)" || echo "Encryption status unknown"
-    freebsd,dragonfly: geli status || echo "GELI not configured"
-    openbsd: bioctl -i softraid0  || echo "No encrypted volumes"
-    netbsd: cgdconfig -l  || echo "CGD not configured"
-    solaris,illumos: zpool status | grep -E "state:|ONLINE" || echo "ZFS encryption status unknown"
-    windows: 'manage-bde -status C: | findstr /i "protection status conversion"'
+  disk_encryption:
+    commands:
+      linux:
+        - lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE
+      darwin:
+        - diskutil info /
+      freebsd,dragonfly:
+        - geli status
+      openbsd:
+        - bioctl softraid0
+      netbsd:
+        - cgdconfig -l
+      solaris,illumos:
+        - zpool status
+      windows:
+        - "manage-bde.exe -status C:"
+    remediation:
+      darwin:
+        - "Open System Settings > Privacy & Security"
+        - "Scroll down to FileVault"
+        - "Click 'Turn On...' to enable FileVault"
+        - "Follow the prompts to set up disk encryption"
+        - "Save your recovery key in a secure location"
+        - "Restart your Mac to complete the encryption process"
+      linux:
+        - "For Ubuntu/Debian with LUKS:"
+        - "Back up your data before proceeding"
+        - "Install encryption tools: sudo apt install cryptsetup"
+        - "Use LUKS to encrypt partitions (requires reformatting)"
+        - "Or enable home directory encryption: sudo apt install ecryptfs-utils"
+        - "Run: ecryptfs-migrate-home -u <username>"
+      windows:
+        - "Open Settings > Update & Security > Device encryption"
+        - "If available, turn on Device encryption"
+        - "For BitLocker (Pro/Enterprise):"
+        - "Open Control Panel > BitLocker Drive Encryption"
+        - "Click 'Turn on BitLocker' for your system drive"
+        - "Follow the setup wizard and save your recovery key"
 
   firewall:
-    linux: iptables -L -n  | grep -E "^Chain|policy" || echo "Firewall not accessible"
-    darwin,freebsd,openbsd,netbsd,dragonfly: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
-    solaris,illumos: ipfstat -io  | head -20 || echo "IPFilter not accessible"
-    windows: netsh advfirewall show allprofiles | findstr /i "state domain private public"
+    commands:
+      linux:
+        # Try both iptables and ufw
+        - iptables -L -n -v
+        - ufw status verbose
+      darwin:
+        # Check packet filter (network firewall)
+        - pfctl -sr
+        - pfctl -s info
+      freebsd,openbsd,netbsd,dragonfly:
+        - pfctl -sr
+        - pfctl -s info
+      solaris,illumos:
+        - ipfstat -io
+      windows:
+        - netsh.exe advfirewall show allprofiles
+    remediation:
+      darwin:
+        - "Enable the packet filter firewall:"
+        - "Create firewall rules in /etc/pf.conf"
+        - "Enable with: sudo pfctl -e"
+        - "Load rules with: sudo pfctl -f /etc/pf.conf"
+        - "To persist across reboots, create a LaunchDaemon"
+      linux:
+        - "For systems with UFW (Ubuntu/Debian):"
+        - "Install UFW: sudo apt install ufw"
+        - "Set default policies: sudo ufw default deny incoming"
+        - "Allow SSH: sudo ufw allow ssh"
+        - "Enable firewall: sudo ufw enable"
+        - "Check status: sudo ufw status verbose"
+      windows:
+        - "Open Windows Security settings"
+        - "Go to Firewall & network protection"
+        - "Ensure all profiles are turned on (Domain, Private, Public)"
+        - "Click 'Advanced settings' for detailed configuration"
 
-  screensaver:
-    linux: |
-      gsettings get org.gnome.desktop.screensaver lock-enabled  ||
-      xset q  | grep -A2 "Screen Saver" ||
-      echo "Screensaver settings not accessible"
-    darwin: |
-      defaults read com.apple.screensaver askForPassword  &&
-      defaults read com.apple.screensaver askForPasswordDelay  ||
-      echo "Not configured"
+  app_firewall:
+    commands:
+      darwin:
+        # Check Application Firewall (socketfilterfw)
+        - socketfilterfw --getglobalstate
+    remediation:
+      darwin:
+        - "Open System Settings > Network > Firewall"
+        - "Click on 'Options...'"
+        - "Turn on 'Enable Firewall'"
+        - "Check 'Block all incoming connections' for maximum security"
+        - "Or use command line:"
+        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on"
+        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall off"
+        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setallowsigned on"
 
-  passwordpolicy:
-    linux: |
-      grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs  ||
-      echo "Password policy not configured"
-    darwin: pwpolicy getaccountpolicies  | head -50 || echo "Password policy not accessible"
-    freebsd,dragonfly,netbsd: grep -E "^password" /etc/pam.d/system  || echo "PAM not configured"
-    openbsd: grep -E "^password" /etc/login.conf  | head -20 || echo "Login config not found"
-    solaris,illumos: grep -E "^PASS|^LOCK" /etc/default/passwd  || echo "Password defaults not found"
+  screen_lock:
+    commands:
+      linux:
+        # Check multiple desktop environments
+        - gsettings get org.gnome.desktop.screensaver lock-enabled
+        - xset q
+        - dconf read /org/gnome/desktop/screensaver/lock-enabled
+        - kreadconfig5 --file kscreenlockerrc --group Daemon --key Autolock
+      darwin:
+        - defaults -currentHost read com.apple.screensaver idleTime
+        - sysadminctl -screenLock status
+    remediation:
+      darwin:
+        - "Open System Settings > Lock Screen"
+        - "Set 'Start Screen Saver when inactive' to 15 minutes or less"
+        - "Set 'Require password after screen saver begins' to 'immediately'"
+        - "Turn off 'Use Apple Watch to unlock'"
+        - "Or use command line:"
+        - "defaults -currentHost write com.apple.screensaver idleTime -int 900"
+        - "defaults write com.apple.screensaver askForPassword -int 1"
+        - "defaults write com.apple.screensaver askForPasswordDelay -int 0"
+      linux:
+        - "For GNOME:"
+        - "Open Settings > Privacy > Screen Lock"
+        - "Enable 'Automatic Screen Lock'"
+        - "Set 'Automatic Screen Lock Delay' to 15 minutes or less"
+        - "Or use: gsettings set org.gnome.desktop.screensaver lock-enabled true"
+        - "gsettings set org.gnome.desktop.session idle-delay 900"
+      windows:
+        - "Open Settings > Accounts > Sign-in options"
+        - "Under 'Require sign-in', select '15 minutes'"
+        - "Open Settings > Personalization > Lock screen"
+        - "Configure screen timeout settings"
 
-  updates:
-    linux: |
-      apt list --upgradable  | head -20 ||
-      yum check-update  | head -20 ||
-      dnf check-update  | head -20 ||
-      echo "Package manager not found"
-    darwin: softwareupdate -l  | head -30 || echo "Updates not accessible"
-    freebsd,dragonfly: pkg audit  | head -20 || echo "pkg audit not available"
-    openbsd: syspatch -c  || echo "syspatch not available"
-    netbsd: pkg_admin audit  || echo "pkg_admin not available"
-    solaris,illumos: pkg list -u  | head -20 || echo "IPS updates not available"
+  auto_login:
+    commands:
+      darwin:
+        # Check if automatic login is enabled
+        - defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
+        - defaults read /Library/Preferences/com.apple.loginwindow autoLoginUserUID
+      linux:
+        # Check GDM auto login settings
+        - cat /etc/gdm3/custom.conf
+        - cat /etc/gdm/custom.conf
+        # Check LightDM auto login
+        - cat /etc/lightdm/lightdm.conf
+        # Check SDDM auto login
+        - cat /etc/sddm.conf
+        # Check systemd auto login
+        - systemctl get-default
+        - cat /etc/systemd/system/getty@tty1.service.d/autologin.conf
+    remediation:
+      darwin:
+        - "Open System Settings > Users & Groups"
+        - "Click the lock to make changes"
+        - "Click 'Login Options'"
+        - "Set 'Automatic login' to 'Off'"
+        - "Or use command line:"
+        - "sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser"
+        - "sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUserUID"
+      linux:
+        - "For GDM (GNOME):"
+        - "Edit /etc/gdm3/custom.conf or /etc/gdm/custom.conf"
+        - "Remove or comment out 'AutomaticLoginEnable=true'"
+        - "Remove or comment out 'AutomaticLogin=username'"
+        - "For LightDM: Edit /etc/lightdm/lightdm.conf"
+        - "Remove or comment out 'autologin-user=username'"
+        - "Restart the display manager after changes"
+
+  password_policy:
+    commands:
+      linux:
+        - cat /etc/login.defs
+      darwin:
+        - pwpolicy getaccountpolicies
+      freebsd,dragonfly,netbsd:
+        - cat /etc/pam.d/system
+      openbsd:
+        - cat /etc/login.conf
+      solaris,illumos:
+        - cat /etc/default/passwd
+    remediation:
+      darwin:
+        - "Open System Settings > Touch ID & Password (or Users & Groups)"
+        - "Click on 'Change Password...'"
+        - "Use a strong password with at least 12 characters"
+        - "For enterprise policy, use pwpolicy command:"
+        - "sudo pwpolicy -setglobalpolicy 'minChars=12'"
+        - "sudo pwpolicy -setglobalpolicy 'requiresAlpha=1'"
+        - "sudo pwpolicy -setglobalpolicy 'requiresNumeric=1'"
+      linux:
+        - "Edit /etc/pam.d/common-password (Debian/Ubuntu) or /etc/pam.d/system-auth (RHEL)"
+        - "Add password quality requirements using pam_pwquality.so:"
+        - "password requisite pam_pwquality.so minlen=12 ucredit=-1 lcredit=-1 dcredit=-1"
+        - "Edit /etc/login.defs:"
+        - "Set PASS_MAX_DAYS to 90 or less"
+        - "Set PASS_MIN_LEN to 12 or more"
+
+  software_updates:
+    commands:
+      linux:
+        # Check multiple package managers
+        - apt list --upgradable
+        - yum check-update
+        - dnf check-update
+        - zypper list-updates
+        - pacman -Qu
+      darwin:
+        - softwareupdate -l
+      freebsd,dragonfly:
+        - pkg audit
+      openbsd:
+        - syspatch -c
+      netbsd:
+        - pkg_admin audit
+      solaris,illumos:
+        - pkg list -u
+    remediation:
+      darwin:
+        - "Open System Settings > General > Software Update"
+        - "Click 'Update Now' to install available updates"
+        - "Enable 'Automatic Updates' for security updates"
+        - "Or use command line:"
+        - "List updates: softwareupdate -l"
+        - "Install all updates: sudo softwareupdate -ia"
+        - "Install only recommended: sudo softwareupdate -ir"
+      linux:
+        - "For Debian/Ubuntu:"
+        - "Update package list: sudo apt update"
+        - "Upgrade packages: sudo apt upgrade"
+        - "Full upgrade: sudo apt full-upgrade"
+        - "For RHEL/Fedora:"
+        - "Update packages: sudo dnf update"
+        - "For Arch: sudo pacman -Syu"
 
   antivirus:
-    linux: |
-      systemctl is-active clamav-daemon  ||
-      pgrep -l "(clam|sophos|mcafee|symantec)"  | head -5 ||
-      echo "No antivirus detected"
-    darwin: |
-      pgrep -l "(XProtect|MRT|Sophos|McAfee|Symantec|malcontent|Elastic)"  | head -5 ||
-      echo "No antivirus detected"
+    commands:
+      linux:
+        - systemctl is-active clamav-daemon
+        # Use ps to check for AV processes
+        - ps aux
+      darwin:
+        # Check for XProtect (Apple's built-in antivirus)
+        - pgrep -l XProtect
+      windows:
+        - 'wmic.exe /namespace:\\root\SecurityCenter2 path AntiVirusProduct get displayName,productState'
+    remediation:
+      darwin:
+        - "macOS includes XProtect and Malware Removal Tool (MRT) by default"
+        - "Ensure XProtect is running: pgrep -l XProtect"
+        - "Keep macOS updated to get the latest malware definitions"
+        - "XProtect updates automatically in the background"
+        - "For additional protection:"
+        - "Enable Gatekeeper: spctl --master-enable"
+        - "Keep System Integrity Protection (SIP) enabled"
+      linux:
+        - "Install ClamAV:"
+        - "Ubuntu/Debian: sudo apt install clamav clamav-daemon"
+        - "RHEL/Fedora: sudo dnf install clamav clamav-update"
+        - "Update virus database: sudo freshclam"
+        - "Enable daemon: sudo systemctl enable clamav-daemon"
+        - "Start daemon: sudo systemctl start clamav-daemon"
 
-  systeminfo:
-    linux: cat /etc/os-release  | grep -E "^(NAME|VERSION|ID)" || echo "System info not available"
-    darwin: sw_vers
-    freebsd: freebsd-version
-    openbsd: uname -rsv
-    netbsd: uname -rsv
-    dragonfly: uname -rsv
-    solaris,illumos: cat /etc/release || uname -rsv
-    windows: systeminfo | findstr /i "os name version"
+  system_info:
+    commands:
+      linux:
+        - cat /etc/os-release
+      darwin:
+        - sw_vers
+      freebsd:
+        - freebsd-version -ku
+      openbsd,netbsd,dragonfly:
+        - uname -rsv
+      solaris,illumos:
+        - cat /etc/release
+      windows:
+        - systeminfo.exe

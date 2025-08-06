@@ -17,13 +17,21 @@ type Device struct {
 	LoggedInUsers string `json:"-"`
 }
 
-// Check represents a single compliance check result.
+// CommandOutput represents the output from a single command execution.
+type CommandOutput struct {
+	Command  string `json:"command"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}
+
+// Check represents a compliance check result, potentially with multiple command outputs.
 type Check struct {
-	Timestamp time.Time `json:"-"` // Not stored in JSON, set from file mtime
-	Command   string    `json:"command"`
-	Stdout    string    `json:"stdout"`
-	Stderr    string    `json:"stderr"`
-	ExitCode  int       `json:"exit_code"`
+	Timestamp   time.Time       `json:"-"`                     // Not stored in JSON, set from file mtime
+	Outputs     []CommandOutput `json:"outputs"`               // All command outputs for this check
+	Status      string          `json:"status"`                // "pass", "fail", or "n/a"
+	Reason      string          `json:"reason"`                // Human-readable explanation of the status
+	Remediation []string        `json:"remediation,omitempty"` // Steps to fix if failed
 }
 
 // DeviceReport represents a compliance report sent by an agent.
@@ -36,4 +44,19 @@ type DeviceReport struct {
 	SystemUptime  string           `json:"system_uptime,omitempty"`
 	CPULoad       string           `json:"cpu_load,omitempty"`
 	LoggedInUsers string           `json:"logged_in_users,omitempty"`
+}
+
+// IsValidCheckName validates that a check name contains only safe characters.
+func IsValidCheckName(name string) bool {
+	// Security: Only allow alphanumeric, underscore, and hyphen
+	const maxCheckNameLength = 100
+	for _, r := range name {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '_' && r != '-' {
+			return false
+		}
+	}
+	return name != "" && len(name) <= maxCheckNameLength
 }

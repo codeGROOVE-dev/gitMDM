@@ -2,6 +2,8 @@
 
 Security-first compliance reporting that doesn't compromise your infrastructure.
 
+![gitMDM Logo](media/logo_small.png)
+
 ## The Problem
 
 Every MDM is a backdoor. They typically require root access and arbitrary remote code execution. They're incompatible with secure-by-default operating systems. Yet auditors require them for SOC 2.
@@ -14,11 +16,22 @@ gitMDM proves compliance without compromising security:
 - **No phone-home** - Your git repo, your endpoint, your control
 - **Works everywhere** - Including secure-by-default systems such as OpenBSD.
 
+## Screenshots
+
+**Dashboard: Compliance at a glance**
+<a href="media/dashboard.png"><img src="media/dashboard.png" alt="Dashboard" width="400"/></a>
+
+**Agent Report: Detailed results**
+<a href="media/report.png"><img src="media/report.png" alt="Agent Report" width="400"/></a>
+
+**Remediation: Plain-English guidance**
+<a href="media/remediate.png"><img src="media/remediate.png" alt="Remediation Steps" width="400"/></a>
+
 ## How It Works
 
 ```
 [Agent]                    [Server]                   [Git]
-Run compiled checks  →  Receive reports only  →  Immutable audit trail
+Run compiled checks  →  Receive reports only  → Tamper-resistant audit trail
 ```
 
 The server **cannot** push commands. Ever. That's the point.
@@ -27,10 +40,36 @@ The server **cannot** push commands. Ever. That's the point.
 
 ```bash
 # Server
-./gitmdm-server -git git@github.com:org/compliance.git -api-key SECRET
+./out/gitmdm-server -git git@github.com:org/compliance.git -api-key SECRET
 
-# Agent (checks compiled in from checks.yaml)
-./gitmdm-agent -server https://server:8080
+# Agent  
+./out/gitmdm-agent -server https://server:8080
+```
+
+## Local Checks
+
+You can run the compliance checks even without a server:
+
+```bash
+./out/gitmdm-agent -run all
+```
+
+You'll see output similar to:
+
+```log
+🔍 Running security checks...
+
+⚠️  3 issues require attention
+
+🔸 screen lock
+   🐞 Problem: Screen idle time too long (1 hour, SOC 2 requires ≤15 min); Screen lock delay too long (4 hours, SOC 2 requires ≤15 min)
+   💻 Evidence: defaults -currentHost read com.apple.screensaver idleTime && sysadminctl -screenLock status
+
+   🔧 How to fix:
+      1. Open System Settings > Lock Screen
+      2. Set 'Start Screen Saver when inactive' to 15 minutes or less
+      3. Open System Settings > Lock Screen
+      4. Set 'Require password after screen saver begins' to 'immediately'
 ```
 
 ## What You Get
@@ -70,8 +109,7 @@ Edit, compile, deploy. No runtime configuration files to tamper with.
 ## Building
 
 ```bash
-vim checks.yaml  # Define your compliance checks
-make build       # Compiles checks into binary
+make all
 ```
 
 ## FAQ
@@ -80,7 +118,7 @@ make build       # Compiles checks into binary
 A: It generates the reports auditors need. Without the backdoors.
 
 **Q: What if we need to change checks?**
-A: Rebuild and redeploy. Immutability is a feature.
+A: Rebuild and redeploy. Immutability is a feature, not a bug.
 
 **Q: Why git?**
 A: Cryptographic proof, audit trail, existing tooling, no database.

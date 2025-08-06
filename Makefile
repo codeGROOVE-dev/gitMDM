@@ -7,8 +7,8 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-SERVER_BINARY=gitmdm-server
-AGENT_BINARY=gitmdm-agent
+SERVER_BINARY=./out/gitmdm-server
+AGENT_BINARY=./out/gitmdm-agent
 SERVER_PATH=./cmd/server
 AGENT_PATH=./cmd/agent
 

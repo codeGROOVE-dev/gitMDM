@@ -58,13 +58,13 @@ type Server struct {
 	store         *gitstore.Store
 	tmpl          *template.Template
 	devices       map[string]*types.Device
-	mu            sync.RWMutex
 	failedReports chan *types.Device
-	healthy       bool
+	mu            sync.RWMutex
 	healthMu      sync.RWMutex
+	statsmu       sync.RWMutex
 	requestCount  int64
 	errorCount    int64
-	statsmu       sync.RWMutex
+	healthy       bool
 }
 
 func main() {
@@ -81,7 +81,7 @@ func main() {
 
 	var store *gitstore.Store
 	var err error
-	
+
 	if *clone != "" {
 		// Use existing local clone directly (no push/pull)
 		store, err = gitstore.NewLocal(ctx, *clone)
@@ -89,14 +89,40 @@ func main() {
 		// Clone repository to temp directory (with push/pull)
 		store, err = gitstore.NewRemote(ctx, *gitURL)
 	}
-	
+
 	if err != nil {
 		cancel() // Cancel context before fatal exit
 		log.Fatalf("[ERROR] Failed to initialize git store: %v", err)
 	}
 	defer cancel()
 
-	tmpl := template.Must(template.ParseFS(templates, "templates/*.html"))
+	// Create template with helper functions
+	funcMap := template.FuncMap{
+		"formatTime": func(t time.Time) string {
+			if t.IsZero() {
+				return "N/A"
+			}
+			return t.Format("2006-01-02 15:04:05")
+		},
+		"formatAgo": func(t time.Time) string {
+			if t.IsZero() {
+				return "never"
+			}
+			dur := time.Since(t).Round(time.Second)
+			if dur < time.Minute {
+				return fmt.Sprintf("%d seconds ago", int(dur.Seconds()))
+			}
+			if dur < time.Hour {
+				return fmt.Sprintf("%d minutes ago", int(dur.Minutes()))
+			}
+			if dur < 24*time.Hour {
+				return fmt.Sprintf("%d hours ago", int(dur.Hours()))
+			}
+			return fmt.Sprintf("%d days ago", int(dur.Hours()/24))
+		},
+	}
+
+	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "templates/*.html"))
 
 	server := &Server{
 		store:         store,
@@ -246,6 +272,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	s.incrementRequestCount()
 
+	// Security: Only allow GET requests for device viewing
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
 	hardwareID := strings.TrimPrefix(r.URL.Path, "/device/")
 	if hardwareID == "" {
 		s.incrementErrorCount()
@@ -340,11 +372,22 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		totalOutput := len(check.Stdout) + len(check.Stderr)
 		if totalOutput > maxCheckOutput {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check output too large from %s: %s (stdout: %d, stderr: %d, total: %d bytes)", 
+			log.Printf("[WARN] Check output too large from %s: %s (stdout: %d, stderr: %d, total: %d bytes)",
 				request.RemoteAddr, name, len(check.Stdout), len(check.Stderr), totalOutput)
 			http.Error(writer, "Check output too large", http.StatusBadRequest)
 			return
 		}
+	}
+
+	// Extract client IP (handle X-Forwarded-For for proxies)
+	clientIP := request.RemoteAddr
+	if xff := request.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take the first IP from X-Forwarded-For
+		if parts := strings.Split(xff, ","); len(parts) > 0 {
+			clientIP = strings.TrimSpace(parts[0])
+		}
+	} else if xri := request.Header.Get("X-Real-IP"); xri != "" {
+		clientIP = xri
 	}
 
 	now := time.Now()
@@ -353,6 +396,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		Hostname:   report.Hostname,
 		User:       report.User,
 		LastSeen:   now,
+		LastIP:     clientIP,
 		Checks:     report.Checks,
 	}
 

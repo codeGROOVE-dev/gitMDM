@@ -11,6 +11,7 @@
         .check { margin-bottom: 30px; border-top: 1px solid #ccc; padding-top: 15px; }
         .check h3 { font-size: 16px; margin: 10px 0; background: #f0f0f0; padding: 5px; }
         .command { color: #666; font-size: 12px; margin: 5px 0; }
+        .timestamp { color: #888; font-size: 11px; margin: 5px 0; font-style: italic; }
         pre { background: #f8f8f8; padding: 10px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
         .nav { margin-bottom: 20px; }
     </style>
@@ -26,7 +27,8 @@
         <p><strong>Hardware ID:</strong> {{.HardwareID}}</p>
         <p><strong>Hostname:</strong> {{.Hostname}}</p>
         <p><strong>User:</strong> {{.User}}</p>
-        <p><strong>Last Seen:</strong> {{.LastSeen.Format "2006-01-02 15:04:05"}}</p>
+        <p><strong>Last Check-in:</strong> {{formatTime .LastSeen}} ({{formatAgo .LastSeen}})</p>
+        <p><strong>Last IP:</strong> {{if .LastIP}}{{.LastIP}}{{else}}N/A{{end}}</p>
     </div>
 
     <h2>Compliance Checks</h2>
@@ -34,6 +36,9 @@
     <div class="check">
         <h3>{{$name}}</h3>
         <div class="command">Command: {{$check.Command}}</div>
+        <div class="timestamp">
+            Last updated: {{formatTime $check.Timestamp}} ({{formatAgo $check.Timestamp}})
+        </div>
         <pre>{{$check.Stdout}}</pre>
         {{if $check.Stderr}}
         <div class="stderr">Stderr: <pre>{{$check.Stderr}}</pre></div>

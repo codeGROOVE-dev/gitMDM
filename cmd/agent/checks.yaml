@@ -3,34 +3,33 @@ checks:
     all: hostname
 
   uname:
-    linux: uname -a
-    darwin: uname -a
-    freebsd: uname -a
-    openbsd: uname -a
+    linux,darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: uname -a
+    windows: ver
 
   users:
-    linux: cat /etc/passwd
+    linux,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: cat /etc/passwd
     darwin: dscl . -list /Users | grep -v ^_
-    freebsd: cat /etc/passwd
-    openbsd: cat /etc/passwd
+    windows: net user
 
   network:
     linux: ip addr show  | grep -E "^[0-9]+:|inet " | grep -v "127.0.0.1"
-    darwin: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
-    freebsd: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
-    openbsd: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
+    darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
+    windows: ipconfig /all | findstr /i "adapter ipv4 ipv6"
 
   diskencryption:
     linux: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE  | grep -v loop
     darwin: diskutil info / | grep -E "(Encrypted|FileVault|Encryption)" || echo "Encryption status unknown"
-    freebsd: geli status  || echo "GELI not configured"
+    freebsd,dragonfly: geli status || echo "GELI not configured"
     openbsd: bioctl -i softraid0  || echo "No encrypted volumes"
+    netbsd: cgdconfig -l  || echo "CGD not configured"
+    solaris,illumos: zpool status | grep -E "state:|ONLINE" || echo "ZFS encryption status unknown"
+    windows: manage-bde -status C: | findstr /i "protection status conversion"
 
   firewall:
     linux: iptables -L -n  | grep -E "^Chain|policy" || echo "Firewall not accessible"
-    darwin: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
-    freebsd: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
-    openbsd: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
+    darwin,freebsd,openbsd,netbsd,dragonfly: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
+    solaris,illumos: ipfstat -io  | head -20 || echo "IPFilter not accessible"
+    windows: netsh advfirewall show allprofiles | findstr /i "state domain private public"
 
   screensaver:
     linux: |
@@ -47,8 +46,9 @@ checks:
       grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs  ||
       echo "Password policy not configured"
     darwin: pwpolicy getaccountpolicies  | head -50 || echo "Password policy not accessible"
-    freebsd: grep -E "^password" /etc/pam.d/system  || echo "PAM not configured"
+    freebsd,dragonfly,netbsd: grep -E "^password" /etc/pam.d/system  || echo "PAM not configured"
     openbsd: grep -E "^password" /etc/login.conf  | head -20 || echo "Login config not found"
+    solaris,illumos: grep -E "^PASS|^LOCK" /etc/default/passwd  || echo "Password defaults not found"
 
   updates:
     linux: |
@@ -57,8 +57,10 @@ checks:
       dnf check-update  | head -20 ||
       echo "Package manager not found"
     darwin: softwareupdate -l  | head -30 || echo "Updates not accessible"
-    freebsd: pkg audit  | head -20 || echo "pkg audit not available"
+    freebsd,dragonfly: pkg audit  | head -20 || echo "pkg audit not available"
     openbsd: syspatch -c  || echo "syspatch not available"
+    netbsd: pkg_admin audit  || echo "pkg_admin not available"
+    solaris,illumos: pkg list -u  | head -20 || echo "IPS updates not available"
 
   antivirus:
     linux: |
@@ -66,17 +68,15 @@ checks:
       pgrep -l "(clam|sophos|mcafee|symantec)"  | head -5 ||
       echo "No antivirus detected"
     darwin: |
-      pgrep -l "(XProtect|MRT|Sophos|McAfee|Symantec)"  | head -5 ||
+      pgrep -l "(XProtect|MRT|Sophos|McAfee|Symantec|malcontent|Elastic)"  | head -5 ||
       echo "No antivirus detected"
-
-  audit:
-    linux: auditctl -l  | head -20 || echo "Audit not configured"
-    darwin: audit -s  || echo "Audit not accessible"
-    freebsd: auditctl -l  | head -20 || echo "Audit not configured"
-    openbsd: echo "Audit subsystem check not implemented"
 
   systeminfo:
     linux: cat /etc/os-release  | grep -E "^(NAME|VERSION|ID)" || echo "System info not available"
     darwin: sw_vers
     freebsd: freebsd-version
     openbsd: uname -rsv
+    netbsd: uname -rsv
+    dragonfly: uname -rsv
+    solaris,illumos: cat /etc/release || uname -rsv
+    windows: systeminfo | findstr /i "os name version"

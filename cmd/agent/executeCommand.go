@@ -3,16 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os/exec"
+	"strings"
 	"time"
 
 	"gitmdm/internal/types"
 )
 
-// executeCommandWithPipes executes a command and captures stdout/stderr separately
+// executeCommandWithPipes executes a command and captures stdout/stderr separately.
 func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) types.Check {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
@@ -29,7 +30,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 
-	// Capture stderr  
+	// Capture stderr
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 
@@ -48,11 +49,14 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 			log.Printf("[WARN] Command timed out after %v: %s", duration, command)
 			stderr = "Command timed out after " + duration.String()
 			exitCode = -1
-		} else if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
 		} else {
-			exitCode = -1
-			stderr += fmt.Sprintf("\nCommand error: %v", err)
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = -1
+				stderr += fmt.Sprintf("\nCommand error: %v", err)
+			}
 		}
 	}
 
@@ -61,12 +65,21 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	if checkName != "" {
 		prefix = fmt.Sprintf("[%s] ", checkName)
 	}
-	
-	if stdout != "" {
-		log.Printf("[INFO] %sCommand stdout (%d bytes): %s", prefix, len(stdout), truncateForLog(stdout, 200))
+
+	// Only log non-empty outputs
+	if stdout != "" && strings.TrimSpace(stdout) != "" {
+		trimmed := strings.TrimSpace(stdout)
+		if len(trimmed) > maxLogLength {
+			trimmed = trimmed[:maxLogLength] + "..."
+		}
+		log.Printf("[INFO] %sstdout (%d bytes): %s", prefix, len(stdout), trimmed)
 	}
-	if stderr != "" {
-		log.Printf("[INFO] %sCommand stderr (%d bytes): %s", prefix, len(stderr), truncateForLog(stderr, 200))
+	if stderr != "" && strings.TrimSpace(stderr) != "" {
+		trimmed := strings.TrimSpace(stderr)
+		if len(trimmed) > maxLogLength {
+			trimmed = trimmed[:maxLogLength] + "..."
+		}
+		log.Printf("[INFO] %sstderr (%d bytes): %s", prefix, len(stderr), trimmed)
 	}
 
 	if *debug {
@@ -82,39 +95,11 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	}
 }
 
-// limitOutput truncates output if it exceeds maxSize
+// limitOutput truncates output if it exceeds maxSize.
 func limitOutput(data []byte, maxSize int) string {
 	if len(data) > maxSize {
 		truncated := data[:maxSize]
 		return string(truncated) + "\n[Output truncated to 10KB]..."
 	}
-	return string(data)
-}
-
-// truncateForLog truncates a string for logging purposes
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// limitedRead reads from a reader up to maxBytes
-func limitedRead(r io.Reader, maxBytes int) string {
-	limited := &io.LimitedReader{R: r, N: int64(maxBytes)}
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return fmt.Sprintf("Error reading output: %v", err)
-	}
-
-	// Check if output was truncated
-	if limited.N == 0 {
-		// Try to read one more byte to see if there's more data
-		extraByte := make([]byte, 1)
-		if n, _ := r.Read(extraByte); n > 0 {
-			return string(data) + "\n[Output truncated to 10KB]..."
-		}
-	}
-
 	return string(data)
 }

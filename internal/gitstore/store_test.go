@@ -18,12 +18,12 @@ func TestSanitizeID(t *testing.T) {
 		expected string
 	}{
 		{"normal-id", "normal-id"},
-		{"../../../etc/passwd", "---etc-passwd"},
+		{"../../../etc/passwd", "etc-passwd"},
 		{"id/with/slashes", "id-with-slashes"},
 		{"id\\with\\backslashes", "id-with-backslashes"},
 		{"id:with:colons", "id-with-colons"},
 		{"id with spaces", "id-with-spaces"},
-		{"id<with>special*chars?", "id-with-special-chars-"},
+		{"id<with>special*chars?", "id-with-special-chars"},
 		{"", "unknown"},
 		{"..", "unknown"},
 		{"./", "unknown"},
@@ -179,7 +179,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 		t.Fatalf("Failed to save device: %v", err)
 	}
 
-	// Verify the file was saved in the correct location
+	// Verify the file was saved in the correct location (sanitized)
 	expectedDir := filepath.Join(localPath, "devices", "etc-passwd")
 	if _, err := os.Stat(expectedDir); os.IsNotExist(err) {
 		t.Error("Device directory was not created in expected location")

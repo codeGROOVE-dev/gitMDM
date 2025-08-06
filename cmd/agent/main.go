@@ -30,6 +30,8 @@ const (
 	commandTimeout = 10 * time.Second
 	// Maximum output size to prevent memory exhaustion.
 	maxOutputSize = 10 * 1024 // 10KB limit
+	// Maximum log output length for readability.
+	maxLogLength = 200
 	// Minimum parts required for IOPlatformUUID parsing.
 	minUUIDParts = 4
 	// Retry configuration.
@@ -59,11 +61,11 @@ type ChecksConfig struct {
 type Agent struct {
 	config        *ChecksConfig
 	httpClient    *http.Client
+	failedReports chan types.DeviceReport
 	serverURL     string
 	hardwareID    string
 	hostname      string
 	user          string
-	failedReports chan types.DeviceReport
 }
 
 func main() {
@@ -74,11 +76,26 @@ func main() {
 		log.Fatalf("Failed to parse checks config: %v", err)
 	}
 
+	// Get hostname directly
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+
+	// Get current user directly
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("USERNAME")
+	}
+	if user == "" {
+		user = "unknown"
+	}
+
 	agent := &Agent{
 		config:     &config,
 		hardwareID: hardwareID(),
-		hostname:   hostname(),
-		user:       currentUser(),
+		hostname:   hostname,
+		user:       user,
 		httpClient: &http.Client{
 			Timeout: httpTimeout,
 		},
@@ -86,6 +103,10 @@ func main() {
 	}
 
 	if *runCheck != "" {
+		// Security: Validate check name to prevent injection
+		if !isValidCheckName(*runCheck) {
+			log.Fatal("Invalid check name - only alphanumeric and underscore allowed")
+		}
 		output := agent.runSingleCheck(*runCheck)
 		log.Print(output)
 		if !strings.HasSuffix(output, "\n") {
@@ -250,18 +271,40 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
 		checkStart := time.Now()
 		var command string
 
+		// First check exact OS match
 		if cmd, exists := checkCommands[osName]; exists {
 			command = cmd
-		} else if cmd, exists := checkCommands["all"]; exists {
-			command = cmd
 		} else {
-			if *debug {
-				log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
+			// Check for comma-separated OS lists
+			found := false
+			for osListKey, cmd := range checkCommands {
+				osList := strings.Split(osListKey, ",")
+				for _, os := range osList {
+					if strings.TrimSpace(os) == osName {
+						command = cmd
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
 			}
-			continue
+			
+			// Finally check for "all"
+			if !found {
+				if cmd, exists := checkCommands["all"]; exists {
+					command = cmd
+				} else {
+					if *debug {
+						log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
+					}
+					continue
+				}
+			}
 		}
 
-		check := a.executeCommandWithName(ctx, checkName, command)
+		check := a.executeCommandWithPipes(ctx, checkName, command)
 		checks[checkName] = check
 
 		// Determine if check succeeded based on exit code
@@ -293,15 +336,37 @@ func (a *Agent) runSingleCheck(checkName string) string {
 	}
 
 	var command string
+	// First check exact OS match
 	if cmd, exists := checkCommands[osName]; exists {
 		command = cmd
-	} else if cmd, exists := checkCommands["all"]; exists {
-		command = cmd
 	} else {
-		return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
+		// Check for comma-separated OS lists
+		found := false
+		for osListKey, cmd := range checkCommands {
+			osList := strings.Split(osListKey, ",")
+			for _, os := range osList {
+				if strings.TrimSpace(os) == osName {
+					command = cmd
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		
+		// Finally check for "all"
+		if !found {
+			if cmd, exists := checkCommands["all"]; exists {
+				command = cmd
+			} else {
+				return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
+			}
+		}
 	}
 
-	check := a.executeCommand(context.Background(), command)
+	check := a.executeCommandWithPipes(context.Background(), "", command)
 	// For single check output, combine stdout and stderr for display
 	output := check.Stdout
 	if check.Stderr != "" {
@@ -313,14 +378,17 @@ func (a *Agent) runSingleCheck(checkName string) string {
 	return output
 }
 
-func (a *Agent) executeCommand(ctx context.Context, command string) types.Check {
-	// Use the new implementation that captures stdout/stderr separately
-	return a.executeCommandWithPipes(ctx, "", command)
-}
-
-func (a *Agent) executeCommandWithName(ctx context.Context, checkName, command string) types.Check {
-	// Use the new implementation that captures stdout/stderr separately
-	return a.executeCommandWithPipes(ctx, checkName, command)
+func isValidCheckName(name string) bool {
+	// Security: Only allow alphanumeric, underscore, and hyphen
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '_' || r == '-') {
+			return false
+		}
+	}
+	return len(name) > 0 && len(name) <= 100
 }
 
 func hardwareID() string {
@@ -368,7 +436,7 @@ func hardwareID() string {
 		} else if *debug {
 			log.Printf("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
 		}
-	case "freebsd", "openbsd":
+	case "freebsd", "openbsd", "netbsd", "dragonfly":
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
@@ -379,6 +447,39 @@ func hardwareID() string {
 			}
 		} else if *debug {
 			log.Printf("[DEBUG] Failed to get BSD hardware ID via sysctl: %v", err)
+		}
+	case "solaris", "illumos":
+		// Try to get host ID from Solaris/illumos
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "hostid")
+		if output, err := cmd.Output(); err == nil {
+			id = strings.TrimSpace(string(output))
+			if *debug {
+				log.Printf("[DEBUG] Found Solaris/illumos host ID: %s", id)
+			}
+		} else if *debug {
+			log.Printf("[DEBUG] Failed to get Solaris/illumos host ID: %v", err)
+		}
+	case "windows":
+		// Get Windows machine GUID
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "UUID")
+		if output, err := cmd.Output(); err == nil {
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" && trimmed != "UUID" {
+					id = trimmed
+					if *debug {
+						log.Printf("[DEBUG] Found Windows hardware UUID: %s", id)
+					}
+					break
+				}
+			}
+		} else if *debug {
+			log.Printf("[DEBUG] Failed to get Windows hardware ID via wmic: %v", err)
 		}
 	default:
 		if *debug {
@@ -404,22 +505,4 @@ func hardwareID() string {
 	}
 
 	return id
-}
-
-func hostname() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return "unknown"
-	}
-	return hostname
-}
-
-func currentUser() string {
-	if user := os.Getenv("USER"); user != "" {
-		return user
-	}
-	if user := os.Getenv("USERNAME"); user != "" {
-		return user
-	}
-	return "unknown"
 }

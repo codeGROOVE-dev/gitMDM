@@ -1,7 +1,7 @@
 
 # gitMDM: The MDM that isn't a giant security hole
 
-![gitMDM Logo](media/logo.png)
+![gitMDM Logo](media/logo_small.png)
 
 ⚠️ **HIGHLY EXPERIMENTAL - IT MAY EAT YOUR CAT ** ⚠️
 

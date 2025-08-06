@@ -19,11 +19,11 @@ type Device struct {
 
 // Check represents a single compliance check result.
 type Check struct {
+	Timestamp time.Time `json:"-"` // Not stored in JSON, set from file mtime
 	Command   string    `json:"command"`
 	Stdout    string    `json:"stdout"`
 	Stderr    string    `json:"stderr"`
 	ExitCode  int       `json:"exit_code"`
-	Timestamp time.Time `json:"-"` // Not stored in JSON, set from file mtime
 }
 
 // DeviceReport represents a compliance report sent by an agent.

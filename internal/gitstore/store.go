@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gitmdm/internal/gitmdm"
 	"log"
 	"os"
 	"os/exec"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
-	"gitmdm/internal/types"
 )
 
 const (
@@ -119,12 +119,6 @@ func New(ctx context.Context, gitURL string) (*Store, error) {
 	return NewRemote(ctx, gitURL)
 }
 
-// isLocalRepo returns true if this is a local repository (not remote).
-func (s *Store) isLocalRepo() bool {
-	// If gitURL equals repoPath, it's a local repo (set during initialization)
-	return s.gitURL == s.repoPath
-}
-
 func (s *Store) initializeRemote(ctx context.Context) error {
 	start := time.Now()
 	s.mu.Lock()
@@ -136,10 +130,10 @@ func (s *Store) initializeRemote(ctx context.Context) error {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
-	if err := s.runGitCommandWithRetry(ctx, "config", "user.email", "gitmdm@localhost"); err != nil {
+	if err := s.runGitCommandInDirWithRetry(ctx, s.repoPath, "config", "user.email", "gitmdm@localhost"); err != nil {
 		return err
 	}
-	if err := s.runGitCommandWithRetry(ctx, "config", "user.name", "gitMDM"); err != nil {
+	if err := s.runGitCommandInDirWithRetry(ctx, s.repoPath, "config", "user.name", "gitMDM"); err != nil {
 		return err
 	}
 
@@ -155,7 +149,7 @@ func (s *Store) initializeRemote(ctx context.Context) error {
 }
 
 // SaveDevice saves a device's compliance data to the Git repository.
-func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
+func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 	start := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -271,7 +265,7 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 
 	// Git operations with retry logic
 	if err := retry.Do(func() error {
-		return s.runGitCommand(ctx, "add", "-A")
+		return s.runGitCommandInDir(ctx, s.repoPath, "add", "-A")
 	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 		log.Printf("[WARN] Git add failed for device %s: %v", device.HardwareID, err)
 		// Continue without git operations - graceful degradation
@@ -289,15 +283,16 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 	if strings.TrimSpace(status) != "" {
 		commitMsg := fmt.Sprintf("Update device %s (%s)", device.HardwareID, device.Hostname)
 		if err := retry.Do(func() error {
-			return s.runGitCommand(ctx, "commit", "-m", commitMsg)
+			return s.runGitCommandInDir(ctx, s.repoPath, "commit", "-m", commitMsg)
 		}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 			log.Printf("[WARN] Git commit failed for device %s: %v", device.HardwareID, err)
 			return nil
 		}
 
-		if !s.isLocalRepo() {
+		// Push to remote if this is not a local-only repository
+		if s.gitURL != s.repoPath {
 			if err := retry.Do(func() error {
-				return s.runGitCommand(ctx, "push")
+				return s.runGitCommandInDir(ctx, s.repoPath, "push")
 			}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 				log.Printf("[WARN] Git push failed for device %s: %v", device.HardwareID, err)
 				// Don't return error - push failure is not critical
@@ -316,17 +311,18 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 }
 
 // ListDevices returns all devices from the Git repository.
-func (s *Store) ListDevices(ctx context.Context) ([]*types.Device, error) {
+func (s *Store) ListDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 	start := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	log.Print("[DEBUG] Loading devices from git repository")
 
-	if !s.isLocalRepo() {
+	// Pull from remote if this is not a local-only repository
+	if s.gitURL != s.repoPath {
 		log.Print("[DEBUG] Pulling latest changes from remote repository")
 		if err := retry.Do(func() error {
-			return s.runGitCommand(ctx, "pull")
+			return s.runGitCommandInDir(ctx, s.repoPath, "pull")
 		}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
 			log.Printf("[WARN] Git pull failed: %v (continuing with local data)", err)
 		} else {
@@ -339,12 +335,12 @@ func (s *Store) ListDevices(ctx context.Context) ([]*types.Device, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Print("[INFO] No devices directory found, returning empty list")
-			return []*types.Device{}, nil
+			return []*gitmdm.Device{}, nil
 		}
 		return nil, fmt.Errorf("failed to read devices directory: %w", err)
 	}
 
-	var devices []*types.Device
+	var devices []*gitmdm.Device
 	failedCount := 0
 
 	for _, entry := range entries {
@@ -367,7 +363,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]*types.Device, error) {
 	return devices, nil
 }
 
-func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, error) {
+func (s *Store) loadDevice(_ context.Context, dirName string) (*gitmdm.Device, error) {
 	deviceDir := filepath.Join(s.repoPath, "devices", dirName)
 
 	infoPath := filepath.Join(deviceDir, "info.json")
@@ -387,13 +383,13 @@ func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, er
 		return nil, fmt.Errorf("failed to unmarshal device info: %w", err)
 	}
 
-	device := &types.Device{
+	device := &gitmdm.Device{
 		HardwareID: info.HardwareID,
 		Hostname:   info.Hostname,
 		User:       info.User,
 		LastSeen:   info.LastSeen,
 		LastIP:     info.LastIP,
-		Checks:     make(map[string]types.Check),
+		Checks:     make(map[string]gitmdm.Check),
 	}
 
 	// Load check files
@@ -421,7 +417,7 @@ func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, er
 			continue
 		}
 
-		var check types.Check
+		var check gitmdm.Check
 		if err := json.Unmarshal(content, &check); err != nil {
 			log.Printf("Failed to unmarshal check %s: %v", checkName, err)
 			continue
@@ -436,14 +432,6 @@ func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, er
 	}
 
 	return device, nil
-}
-
-func (s *Store) runGitCommand(ctx context.Context, args ...string) error {
-	return s.runGitCommandInDir(ctx, s.repoPath, args...)
-}
-
-func (s *Store) runGitCommandWithRetry(ctx context.Context, args ...string) error {
-	return s.runGitCommandInDirWithRetry(ctx, s.repoPath, args...)
 }
 
 func (s *Store) runGitCommandInDirWithRetry(ctx context.Context, dir string, args ...string) error {
@@ -544,7 +532,7 @@ func sanitizeID(id string) string {
 
 	// Remove leading/trailing dashes and underscores
 	result = strings.Trim(result, "-_")
-	
+
 	// Security: Prevent directory traversal attempts
 	result = strings.ReplaceAll(result, "..", "-")
 	result = strings.ReplaceAll(result, "//", "-")

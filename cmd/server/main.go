@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"gitmdm/internal/gitmdm"
+	"gitmdm/internal/gitstore"
 	"html/template"
 	"log"
 	"net/http"
@@ -19,8 +21,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
-	"gitmdm/internal/gitstore"
-	"gitmdm/internal/types"
 )
 
 const (
@@ -34,6 +34,7 @@ const (
 	maxCheckName    = 100
 	maxCheckOutput  = 10240       // 10KB per check
 	maxRequestBody  = 1024 * 1024 // 1MB limit
+	maxHeaderBytes  = 1 << 16     // 64KB max header size
 	shutdownTimeout = 10 * time.Second
 
 	// Retry configuration for git operations.
@@ -55,11 +56,12 @@ var (
 	apiKey = flag.String("api-key", "", "API key for authentication (optional but recommended)")
 )
 
+// Server represents the gitMDM server that receives and stores compliance reports.
 type Server struct {
 	store         *gitstore.Store
 	tmpl          *template.Template
-	devices       map[string]*types.Device
-	failedReports chan *types.Device
+	devices       map[string]*gitmdm.Device
+	failedReports chan *gitmdm.Device
 	mu            sync.RWMutex
 	healthMu      sync.RWMutex
 	statsmu       sync.RWMutex
@@ -127,9 +129,9 @@ func main() {
 
 	server := &Server{
 		store:         store,
-		devices:       make(map[string]*types.Device),
+		devices:       make(map[string]*gitmdm.Device),
 		tmpl:          tmpl,
-		failedReports: make(chan *types.Device, failedReportsQueueSize),
+		failedReports: make(chan *gitmdm.Device, failedReportsQueueSize),
 		healthy:       true,
 	}
 
@@ -164,7 +166,7 @@ func main() {
 		ReadTimeout:    readTimeout,
 		WriteTimeout:   writeTimeout,
 		IdleTimeout:    idleTimeout,
-		MaxHeaderBytes: 1 << 16, // 64KB max header size
+		MaxHeaderBytes: maxHeaderBytes,
 	}
 
 	go func() {
@@ -216,33 +218,39 @@ func (s *Server) processFailedReports(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Process all queued reports
-			for {
-				select {
-				case device := <-s.failedReports:
-					log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
-					err := retry.Do(func() error {
-						return s.store.SaveDevice(ctx, device)
-					}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
-					if err != nil {
-						log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
-						// Re-queue if there's space, otherwise drop
-						select {
-						case s.failedReports <- device:
-						default:
-							log.Printf("[WARN] Dropping failed device report - queue full")
-						}
-					} else {
-						log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
-					}
-				default:
-					// No more reports to process
-					goto nextTick
-				}
-			}
-		nextTick:
+			s.processQueuedDevices(ctx)
 		}
+	}
+}
+
+func (s *Server) processQueuedDevices(ctx context.Context) {
+	for {
+		select {
+		case device := <-s.failedReports:
+			s.retryFailedDevice(ctx, device)
+		default:
+			// No more reports to process
+			return
+		}
+	}
+}
+
+func (s *Server) retryFailedDevice(ctx context.Context, device *gitmdm.Device) {
+	log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
+	err := retry.Do(func() error {
+		return s.store.SaveDevice(ctx, device)
+	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
+		// Re-queue if there's space, otherwise drop
+		select {
+		case s.failedReports <- device:
+		default:
+			log.Print("[WARN] Dropping failed device report - queue full")
+		}
+	} else {
+		log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
 	}
 }
 
@@ -256,7 +264,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	devices := make([]*types.Device, 0, len(s.devices))
+	devices := make([]*gitmdm.Device, 0, len(s.devices))
 	for _, d := range s.devices {
 		devices = append(devices, d)
 	}
@@ -320,7 +328,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	if *apiKey != "" {
 		providedKey := request.Header.Get("X-API-Key")
 		// Security: Don't accept API key from query params (exposes in logs)
-		if !constantTimeCompare(providedKey, *apiKey) {
+		// Use constant-time comparison to prevent timing attacks
+		if len(providedKey) != len(*apiKey) || subtle.ConstantTimeCompare([]byte(providedKey), []byte(*apiKey)) != 1 {
 			s.incrementErrorCount()
 			log.Printf("[WARN] Unauthorized request from %s", request.RemoteAddr)
 			http.Error(writer, "Unauthorized", http.StatusUnauthorized)
@@ -329,7 +338,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	}
 
 	ctx := request.Context()
-	var report types.DeviceReport
+	var report gitmdm.DeviceReport
 	// Security: Limit request body size to prevent DoS
 	request.Body = http.MaxBytesReader(writer, request.Body, maxRequestBody)
 
@@ -405,7 +414,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	}
 
 	now := time.Now()
-	device := &types.Device{
+	device := &gitmdm.Device{
 		HardwareID: report.HardwareID,
 		Hostname:   report.Hostname,
 		User:       report.User,
@@ -461,7 +470,7 @@ func (s *Server) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	devices := make([]*types.Device, 0, len(s.devices))
+	devices := make([]*gitmdm.Device, 0, len(s.devices))
 	for _, d := range s.devices {
 		devices = append(devices, d)
 	}
@@ -550,41 +559,36 @@ func (s *Server) setHealthy(healthy bool) {
 	s.healthMu.Unlock()
 
 	if !healthy {
-		log.Printf("[WARN] Server health status changed to degraded")
+		log.Print("[WARN] Server health status changed to degraded")
 	} else {
-		log.Printf("[INFO] Server health status changed to healthy")
+		log.Print("[INFO] Server health status changed to healthy")
 	}
-}
-
-// constantTimeCompare performs constant-time string comparison to prevent timing attacks.
-func constantTimeCompare(a, b string) bool {
-	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // isValidHardwareID validates that a hardware ID contains only safe characters.
 func isValidHardwareID(id string) bool {
 	// Allow alphanumeric, hyphens, underscores, and dots (common in UUIDs and machine IDs)
 	for _, r := range id {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_' || r == '.') {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '-' && r != '_' && r != '.' {
 			return false
 		}
 	}
-	return len(id) > 0
+	return id != ""
 }
 
 // isValidCheckName validates that a check name contains only safe characters.
 func isValidCheckName(name string) bool {
 	// Allow alphanumeric, hyphens, and underscores only
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '-' || r == '_') {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '-' && r != '_' {
 			return false
 		}
 	}
-	return len(name) > 0
+	return name != ""
 }

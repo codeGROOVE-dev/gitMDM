@@ -5,12 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"gitmdm/internal/gitmdm"
 	"log"
 	"os/exec"
 	"strings"
 	"time"
-
-	"gitmdm/internal/types"
 )
 
 // executeCommandWithPipes executes a command and captures stdout/stderr separately.
@@ -18,7 +17,7 @@ import (
 // Bash restricted mode (-r) prevents: cd, PATH changes, output redirection, running programs
 // with / in name. Complex shell operations (pipes, grep, awk) are still allowed by design
 // as they're needed for compliance checks. The agent runs with user privileges only.
-func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) types.Check {
+func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) gitmdm.Check {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
@@ -44,8 +43,17 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	duration := time.Since(start)
 
 	// Limit output sizes
-	stdout := limitOutput(stdoutBuf.Bytes(), maxOutputSize)
-	stderr := limitOutput(stderrBuf.Bytes(), maxOutputSize)
+	stdoutBytes := stdoutBuf.Bytes()
+	stdout := string(stdoutBytes)
+	if len(stdoutBytes) > maxOutputSize {
+		stdout = string(stdoutBytes[:maxOutputSize]) + "\n[Output truncated to 10KB]..."
+	}
+
+	stderrBytes := stderrBuf.Bytes()
+	stderr := string(stderrBytes)
+	if len(stderrBytes) > maxOutputSize {
+		stderr = string(stderrBytes[:maxOutputSize]) + "\n[Output truncated to 10KB]..."
+	}
 
 	// Determine exit code
 	exitCode := 0
@@ -92,19 +100,10 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 			duration, exitCode, len(stdout), len(stderr), command)
 	}
 
-	return types.Check{
+	return gitmdm.Check{
 		Command:  command,
 		Stdout:   stdout,
 		Stderr:   stderr,
 		ExitCode: exitCode,
 	}
-}
-
-// limitOutput truncates output if it exceeds maxSize.
-func limitOutput(data []byte, maxSize int) string {
-	if len(data) > maxSize {
-		truncated := data[:maxSize]
-		return string(truncated) + "\n[Output truncated to 10KB]..."
-	}
-	return string(data)
 }

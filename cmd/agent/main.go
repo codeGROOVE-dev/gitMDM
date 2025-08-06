@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"gitmdm/internal/gitmdm"
 	"log"
 	"net/http"
 	"os"
@@ -21,7 +22,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
-	"gitmdm/internal/types"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,14 +55,16 @@ var (
 	debug    = flag.Bool("debug", false, "Enable debug logging")
 )
 
+// ChecksConfig holds the configuration for compliance checks.
 type ChecksConfig struct {
 	Checks map[string]map[string]string `yaml:"checks"`
 }
 
+// Agent represents the gitMDM agent that collects compliance data.
 type Agent struct {
 	config        *ChecksConfig
 	httpClient    *http.Client
-	failedReports chan types.DeviceReport
+	failedReports chan gitmdm.DeviceReport
 	serverURL     string
 	hardwareID    string
 	hostname      string
@@ -99,7 +102,7 @@ func main() {
 		httpClient: &http.Client{
 			Timeout: httpTimeout,
 		},
-		failedReports: make(chan types.DeviceReport, failedReportsQueueSize),
+		failedReports: make(chan gitmdm.DeviceReport, failedReportsQueueSize),
 	}
 
 	if *runCheck != "" {
@@ -157,11 +160,11 @@ func (a *Agent) reportToServer(ctx context.Context) {
 	start := time.Now()
 
 	// Collect system metrics (not persisted to git)
-	uptime := a.getSystemUptime(ctx)
-	cpuLoad := a.getCPULoad(ctx)
-	loggedInUsers := a.getLoggedInUsers(ctx)
+	uptime := a.systemUptime(ctx)
+	cpuLoad := a.cpuLoad(ctx)
+	loggedInUsers := a.loggedInUsers(ctx)
 
-	report := types.DeviceReport{
+	report := gitmdm.DeviceReport{
 		HardwareID:    a.hardwareID,
 		Hostname:      a.hostname,
 		User:          a.user,
@@ -184,9 +187,9 @@ func (a *Agent) reportToServer(ctx context.Context) {
 		// Queue for later retry if queue not full
 		select {
 		case a.failedReports <- report:
-			log.Printf("[INFO] Report queued for retry processing")
+			log.Print("[INFO] Report queued for retry processing")
 		default:
-			log.Printf("[WARN] Failed reports queue is full, dropping report")
+			log.Print("[WARN] Failed reports queue is full, dropping report")
 		}
 		return
 	}
@@ -196,7 +199,7 @@ func (a *Agent) reportToServer(ctx context.Context) {
 	}
 }
 
-func (a *Agent) sendReport(ctx context.Context, report types.DeviceReport) error {
+func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) error {
 	data, err := json.Marshal(report)
 	if err != nil {
 		return fmt.Errorf("failed to marshal report: %w", err)
@@ -235,39 +238,45 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Process all queued reports
-			for {
-				select {
-				case report := <-a.failedReports:
-					log.Printf("[INFO] Retrying failed report for device %s", report.HardwareID)
-					err := retry.Do(func() error {
-						return a.sendReport(ctx, report)
-					}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
-					if err != nil {
-						log.Printf("[ERROR] Failed to retry report: %v", err)
-						// Re-queue if there's space, otherwise drop
-						select {
-						case a.failedReports <- report:
-						default:
-							log.Printf("[WARN] Dropping failed report - queue full")
-						}
-					} else {
-						log.Printf("[INFO] Successfully sent queued report")
-					}
-				default:
-					// No more reports to process
-					goto nextTick
-				}
-			}
-		nextTick:
+			a.processQueuedReports(ctx)
 		}
 	}
 }
 
-func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
+func (a *Agent) processQueuedReports(ctx context.Context) {
+	for {
+		select {
+		case report := <-a.failedReports:
+			a.retryFailedReport(ctx, report)
+		default:
+			// No more reports to process
+			return
+		}
+	}
+}
+
+func (a *Agent) retryFailedReport(ctx context.Context, report gitmdm.DeviceReport) {
+	log.Printf("[INFO] Retrying failed report for device %s", report.HardwareID)
+	err := retry.Do(func() error {
+		return a.sendReport(ctx, report)
+	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to retry report: %v", err)
+		// Re-queue if there's space, otherwise drop
+		select {
+		case a.failedReports <- report:
+		default:
+			log.Print("[WARN] Dropping failed report - queue full")
+		}
+	} else {
+		log.Print("[INFO] Successfully sent queued report")
+	}
+}
+
+func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 	start := time.Now()
-	checks := make(map[string]types.Check)
+	checks := make(map[string]gitmdm.Check)
 	osName := runtime.GOOS
 	successCount := 0
 	failureCount := 0
@@ -288,8 +297,8 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
 			found := false
 			for osListKey, cmd := range checkCommands {
 				osList := strings.Split(osListKey, ",")
-				for _, os := range osList {
-					if strings.TrimSpace(os) == osName {
+				for _, osItem := range osList {
+					if strings.TrimSpace(osItem) == osName {
 						command = cmd
 						found = true
 						break
@@ -302,14 +311,14 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
 
 			// Finally check for "all"
 			if !found {
-				if cmd, exists := checkCommands["all"]; exists {
-					command = cmd
-				} else {
+				cmd, exists := checkCommands["all"]
+				if !exists {
 					if *debug {
 						log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
 					}
 					continue
 				}
+				command = cmd
 			}
 		}
 
@@ -353,8 +362,8 @@ func (a *Agent) runSingleCheck(checkName string) string {
 		found := false
 		for osListKey, cmd := range checkCommands {
 			osList := strings.Split(osListKey, ",")
-			for _, os := range osList {
-				if strings.TrimSpace(os) == osName {
+			for _, osItem := range osList {
+				if strings.TrimSpace(osItem) == osName {
 					command = cmd
 					found = true
 					break
@@ -367,11 +376,11 @@ func (a *Agent) runSingleCheck(checkName string) string {
 
 		// Finally check for "all"
 		if !found {
-			if cmd, exists := checkCommands["all"]; exists {
-				command = cmd
-			} else {
+			cmd, exists := checkCommands["all"]
+			if !exists {
 				return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
 			}
+			command = cmd
 		}
 	}
 
@@ -389,18 +398,19 @@ func (a *Agent) runSingleCheck(checkName string) string {
 
 func isValidCheckName(name string) bool {
 	// Security: Only allow alphanumeric, underscore, and hyphen
+	const maxCheckNameLength = 100
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') ||
-			(r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') ||
-			r == '_' || r == '-') {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '_' && r != '-' {
 			return false
 		}
 	}
-	return len(name) > 0 && len(name) <= 100
+	return name != "" && len(name) <= maxCheckNameLength
 }
 
-func (a *Agent) getSystemUptime(ctx context.Context) string {
+func (*Agent) systemUptime(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -422,7 +432,7 @@ func (a *Agent) getSystemUptime(ctx context.Context) string {
 	return "unavailable"
 }
 
-func (a *Agent) getCPULoad(ctx context.Context) string {
+func (*Agent) cpuLoad(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -454,7 +464,7 @@ func (a *Agent) getCPULoad(ctx context.Context) string {
 	return "unavailable"
 }
 
-func (a *Agent) getLoggedInUsers(ctx context.Context) string {
+func (*Agent) loggedInUsers(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -494,7 +504,7 @@ func (a *Agent) getLoggedInUsers(ctx context.Context) string {
 	return "unavailable"
 }
 
-func getDarwinHardwareID() string {
+func darwinHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
@@ -522,7 +532,7 @@ func getDarwinHardwareID() string {
 	return ""
 }
 
-func getLinuxHardwareID() string {
+func linuxHardwareID() string {
 	data, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
 	if err == nil {
 		id := strings.TrimSpace(string(data))
@@ -542,12 +552,12 @@ func getLinuxHardwareID() string {
 	}
 
 	if *debug {
-		log.Printf("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
+		log.Print("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
 	}
 	return ""
 }
 
-func getBSDHardwareID() string {
+func bsdHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
@@ -565,7 +575,7 @@ func getBSDHardwareID() string {
 	return id
 }
 
-func getSolarisHardwareID() string {
+func solarisHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "hostid")
@@ -583,7 +593,7 @@ func getSolarisHardwareID() string {
 	return id
 }
 
-func getWindowsHardwareID() string {
+func windowsHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "UUID")
@@ -617,15 +627,15 @@ func hardwareID() string {
 	var id string
 	switch runtime.GOOS {
 	case "darwin":
-		id = getDarwinHardwareID()
+		id = darwinHardwareID()
 	case "linux":
-		id = getLinuxHardwareID()
+		id = linuxHardwareID()
 	case "freebsd", "openbsd", "netbsd", "dragonfly":
-		id = getBSDHardwareID()
+		id = bsdHardwareID()
 	case "solaris", "illumos":
-		id = getSolarisHardwareID()
+		id = solarisHardwareID()
 	case "windows":
-		id = getWindowsHardwareID()
+		id = windowsHardwareID()
 	default:
 		if *debug {
 			log.Printf("[DEBUG] Unsupported OS for hardware ID detection: %s", runtime.GOOS)

@@ -1,5 +1,5 @@
-// Package types defines shared data structures for gitMDM.
-package types
+// Package gitmdm defines shared data structures for gitMDM.
+package gitmdm
 
 import "time"
 

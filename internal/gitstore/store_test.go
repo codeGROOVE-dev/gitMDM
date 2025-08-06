@@ -3,14 +3,13 @@ package gitstore
 import (
 	"context"
 	"fmt"
+	"gitmdm/internal/gitmdm"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"gitmdm/internal/types"
 )
 
 func TestSanitizeID(t *testing.T) {
@@ -25,9 +24,9 @@ func TestSanitizeID(t *testing.T) {
 		{"id:with:colons", "id-with-colons"},
 		{"id with spaces", "id-with-spaces"},
 		{"id<with>special*chars?", "id-with-special-chars"},
-		{"", "id-e3b0c44298fc1c14"},              // hash of empty string
-		{"..", "id-5ec1f7e700f37c3d"},            // hash of ".."
-		{"./", "id-c14cecec97312ad1"},            // hash of "./"
+		{"", "id-e3b0c44298fc1c14"},                          // hash of empty string
+		{"..", "id-5ec1f7e700f37c3d"},                        // hash of ".."
+		{"./", "id-c14cecec97312ad1"},                        // hash of "./"
 		{strings.Repeat("a", 300), strings.Repeat("a", 100)}, // max length is now 100
 	}
 
@@ -99,12 +98,12 @@ func TestSaveAndLoadDevice(t *testing.T) {
 	}
 
 	// Create test device
-	device := &types.Device{
+	device := &gitmdm.Device{
 		HardwareID: "test-device-123",
 		Hostname:   "test-host",
 		User:       "test-user",
 		LastSeen:   time.Now(),
-		Checks: map[string]types.Check{
+		Checks: map[string]gitmdm.Check{
 			"hostname": {
 				Command:  "hostname",
 				Stdout:   "test-host.local",
@@ -190,12 +189,12 @@ func TestPathTraversalPrevention(t *testing.T) {
 	}
 
 	// Try to save device with path traversal attempt
-	device := &types.Device{
+	device := &gitmdm.Device{
 		HardwareID: "../../../etc/passwd",
 		Hostname:   "evil-host",
 		User:       "evil-user",
 		LastSeen:   time.Now(),
-		Checks: map[string]types.Check{
+		Checks: map[string]gitmdm.Check{
 			"../../../evil": {
 				Command:  "evil command",
 				Stdout:   "evil output",
@@ -245,14 +244,14 @@ func TestConcurrentSaves(t *testing.T) {
 
 	// Run concurrent saves
 	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
-			device := &types.Device{
+			device := &gitmdm.Device{
 				HardwareID: fmt.Sprintf("device-%d", id),
 				Hostname:   fmt.Sprintf("host-%d", id),
 				User:       "test-user",
 				LastSeen:   time.Now(),
-				Checks:     map[string]types.Check{},
+				Checks:     map[string]gitmdm.Check{},
 			}
 			if err := store.SaveDevice(ctx, device); err != nil {
 				t.Errorf("Failed to save device %d: %v", id, err)
@@ -262,7 +261,7 @@ func TestConcurrentSaves(t *testing.T) {
 	}
 
 	// Wait for all saves to complete
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 

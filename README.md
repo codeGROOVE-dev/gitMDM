@@ -1,99 +1,90 @@
-# gitMDM: The MDM that isn't
+# gitMDM
 
-![gitMDM Logo](media/logo_small.png)
+Security-first compliance reporting that doesn't compromise your infrastructure.
 
-⚠️ **HIGHLY EXPERIMENTAL - MAY EAT YOUR CAT** ⚠️
+## The Problem
 
-## What
+Every MDM is a backdoor. They typically require root access and arbitrary remote code execution. They're incompatible with secure-by-default operating systems. Yet auditors require them for SOC 2.
 
-A "Mobile Device Management" solution that stores compliance data in Git. Built to pass SOC 2 without requiring a highly privileged RCE
+## The Solution
 
-## Why
+gitMDM proves compliance without compromising security:
+- **No arbitrary remote code execution** - Checks are compiled into the agent binary
+- **No privileged access** - Runs as a normal user
+- **No phone-home** - Your git repo, your endpoint, your control
+- **Works everywhere** - Including secure-by-default systems such as OpenBSD.
 
-Because real MDMs are backdoors with compliance features. This just generates the reports auditors want without the ability to actually control your devices.
-
-## Philosophy
-
-- **Can't manage devices** - Only reports on them
-- **Can't execute commands** - Read-only by design
-- **Can't phone home** - Your Git repo, your control
-- **Can't compromise systems** - No privileges, no access
-
-## Architecture
+## How It Works
 
 ```
-Device → Agent (reads) → Server (receives) → Git (stores) → Auditor ✅
+[Agent]                    [Server]                   [Git]
+Run compiled checks  →  Receive reports only  →  Immutable audit trail
 ```
 
-## Features
+The server **cannot** push commands. Ever. That's the point.
 
-Proves compliance without control:
-- Disk encryption status
-- Firewall configuration
-- User accounts
-- System updates
-- Screensaver locks
-
-## Cross Platform
-
-We currently support:
-
-* Linux
-* macOS
-* FreeBSD
-* OpenBSD
-* NetBSD
-* DragonFlyBSD
-* Solaris
-* illumos
-* Windows 11
-
-gitMDM supports any architecture supported by the Go programming language: from riscv to ppc64.
-
-## Installation
+## Quick Start
 
 ```bash
-# Build
-make build
+# Server
+./gitmdm-server -git git@github.com:org/compliance.git -api-key SECRET
 
-# Server (pick one)
-./gitmdm-server -git https://github.com/you/compliance.git  # Clone & push
-./gitmdm-server -clone /path/to/repo                        # Use existing
-
-# Agent
-./gitmdm-agent -server http://your-server:8080
-
-# Deploy
-echo "gitmdm-agent -server http://your-server:8080" | crontab -
+# Agent (checks compiled in from checks.yaml)
+./gitmdm-agent -server https://server:8080
 ```
 
-## GitHub Auth
+## What You Get
+
+SOC 2 compliance evidence in git:
+```
+devices/laptop-alice/disk_encryption.json  ✓
+devices/laptop-alice/screen_lock.json      ✓
+devices/server-prod/firewall.json          ✓
+```
+
+Every check, every change, cryptographically signed and timestamped.
+
+## Supported Platforms
+
+Linux, macOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, Solaris, illumos
+
+## checks.yaml
+
+```yaml
+checks:
+  disk_encryption:
+    openbsd: "bioctl softraid0 | grep -q CRYPTO"
+    linux: "lsblk -o NAME,FSTYPE | grep -q crypto_LUKS"
+    darwin: "fdesetup status | grep -q 'On'"
+```
+
+Edit, compile, deploy. No runtime configuration files to tamper with.
+
+## Security Guarantees
+
+- Server compromise = read-only access to compliance reports
+- No arbitrary code execution, even with root on the server
+- Agent decides what runs based on compiled-in checks
+- Bash restricted mode when shell execution is needed
+
+## Building
 
 ```bash
-# Use SSH (recommended)
-./gitmdm-server -git git@github.com:you/compliance.git
-
-# Or GitHub CLI
-gh auth setup-git
+vim checks.yaml  # Define your compliance checks
+make build       # Compiles checks into binary
 ```
 
-## Configuration
+## FAQ
 
-Edit `checks.yaml` to define compliance checks. Default config satisfies most auditors.
+**Q: Is this SOC 2 compliant?**
+A: It generates the reports auditors need. Without the backdoors.
 
-## Security
+**Q: What if we need to change checks?**
+A: Rebuild and redeploy. Immutability is a feature.
 
-Traditional MDMs: Give someone your house keys to check if the door is locked.
-gitMDM: Someone photographs your locked door from across the street.
-
-**Result**: Compliance without compromise.
-
-**Note**: The server accepts reports without authentication by default. While this means anyone could submit false compliance data, they still can't access or control your actual devices. Enable API key authentication (`-api-key`) or use network-level controls if you need to verify report sources.
-
-## Disclaimer
-
-This software proves compliance. It doesn't actually manage devices. That's the point.
+**Q: Why git?**
+A: Cryptographic proof, audit trail, existing tooling, no database.
 
 ---
 
-*Built with spite by someone who wanted to pass SOC 2 with OpenBSD.*
+*Built for organizations that refuse to compromise security for compliance.*

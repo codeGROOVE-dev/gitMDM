@@ -1,4 +1,4 @@
-package types
+package gitmdm
 
 import (
 	"encoding/json"

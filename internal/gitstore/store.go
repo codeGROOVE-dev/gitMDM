@@ -4,6 +4,7 @@ package gitstore
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -521,7 +522,7 @@ func isValidGitURL(url string) bool {
 
 func sanitizeID(id string) string {
 	// Security: Prevent path traversal and command injection
-	// Use allowlist approach - only allow safe characters
+	// Use strict allowlist approach - only allow safe characters
 	var sanitized strings.Builder
 	for _, r := range id {
 		switch {
@@ -531,7 +532,7 @@ func sanitizeID(id string) string {
 			sanitized.WriteRune(r)
 		case r >= '0' && r <= '9':
 			sanitized.WriteRune(r)
-		case r == '-' || r == '_' || r == '.':
+		case r == '-' || r == '_':
 			sanitized.WriteRune(r)
 		default:
 			// Replace any other character with dash
@@ -541,16 +542,22 @@ func sanitizeID(id string) string {
 
 	result := sanitized.String()
 
-	// Remove leading/trailing dots and dashes
-	result = strings.Trim(result, ".-")
+	// Remove leading/trailing dashes and underscores
+	result = strings.Trim(result, "-_")
+	
+	// Security: Prevent directory traversal attempts
+	result = strings.ReplaceAll(result, "..", "-")
+	result = strings.ReplaceAll(result, "//", "-")
 
 	// Ensure ID is not empty after sanitization
-	if result == "" {
-		result = "unknown"
+	if result == "" || result == "-" || result == "_" {
+		// Use hash of original ID for better uniqueness
+		hash := sha256.Sum256([]byte(id))
+		result = "id-" + hex.EncodeToString(hash[:8])
 	}
 
 	// Limit length to prevent filesystem issues
-	const maxIDLength = 255
+	const maxIDLength = 100
 	if len(result) > maxIDLength {
 		result = result[:maxIDLength]
 	}

@@ -25,10 +25,10 @@ func TestSanitizeID(t *testing.T) {
 		{"id:with:colons", "id-with-colons"},
 		{"id with spaces", "id-with-spaces"},
 		{"id<with>special*chars?", "id-with-special-chars"},
-		{"", "unknown"},
-		{"..", "unknown"},
-		{"./", "unknown"},
-		{strings.Repeat("a", 300), strings.Repeat("a", 255)},
+		{"", "id-e3b0c44298fc1c14"},              // hash of empty string
+		{"..", "id-5ec1f7e700f37c3d"},            // hash of ".."
+		{"./", "id-c14cecec97312ad1"},            // hash of "./"
+		{strings.Repeat("a", 300), strings.Repeat("a", 100)}, // max length is now 100
 	}
 
 	for _, tt := range tests {

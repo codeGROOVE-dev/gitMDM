@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -158,11 +159,12 @@ func main() {
 	mux.HandleFunc("/health", server.handleHealth)
 
 	srv := &http.Server{
-		Addr:         ":" + *port,
-		Handler:      loggingMiddleware(mux),
-		ReadTimeout:  readTimeout,
-		WriteTimeout: writeTimeout,
-		IdleTimeout:  idleTimeout,
+		Addr:           ":" + *port,
+		Handler:        loggingMiddleware(mux),
+		ReadTimeout:    readTimeout,
+		WriteTimeout:   writeTimeout,
+		IdleTimeout:    idleTimeout,
+		MaxHeaderBytes: 1 << 16, // 64KB max header size
 	}
 
 	go func() {
@@ -317,10 +319,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	// Security: Check API key if configured
 	if *apiKey != "" {
 		providedKey := request.Header.Get("X-API-Key")
-		if providedKey == "" {
-			providedKey = request.URL.Query().Get("api_key")
-		}
-		if providedKey != *apiKey {
+		// Security: Don't accept API key from query params (exposes in logs)
+		if !constantTimeCompare(providedKey, *apiKey) {
 			s.incrementErrorCount()
 			log.Printf("[WARN] Unauthorized request from %s", request.RemoteAddr)
 			http.Error(writer, "Unauthorized", http.StatusUnauthorized)
@@ -343,8 +343,15 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	// Security: Validate input fields
 	if report.HardwareID == "" || len(report.HardwareID) > maxFieldLength {
 		s.incrementErrorCount()
-		log.Printf("[WARN] Invalid Hardware ID from %s: %s", request.RemoteAddr, report.HardwareID)
+		log.Printf("[WARN] Invalid Hardware ID from %s: length %d", request.RemoteAddr, len(report.HardwareID))
 		http.Error(writer, "Invalid Hardware ID", http.StatusBadRequest)
+		return
+	}
+	// Additional validation: only allow safe characters in hardware ID
+	if !isValidHardwareID(report.HardwareID) {
+		s.incrementErrorCount()
+		log.Printf("[WARN] Invalid Hardware ID format from %s", request.RemoteAddr)
+		http.Error(writer, "Invalid Hardware ID format", http.StatusBadRequest)
 		return
 	}
 	if len(report.Hostname) > maxFieldLength {
@@ -364,8 +371,15 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	for name, check := range report.Checks {
 		if len(name) > maxCheckName {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check name too long from %s: %s (%d bytes)", request.RemoteAddr, name, len(name))
+			log.Printf("[WARN] Check name too long from %s: %d bytes", request.RemoteAddr, len(name))
 			http.Error(writer, "Check name too long", http.StatusBadRequest)
+			return
+		}
+		// Additional validation: only allow safe characters in check names
+		if !isValidCheckName(name) {
+			s.incrementErrorCount()
+			log.Printf("[WARN] Invalid check name format from %s", request.RemoteAddr)
+			http.Error(writer, "Invalid check name format", http.StatusBadRequest)
 			return
 		}
 		// Check combined output size (stdout + stderr)
@@ -497,9 +511,11 @@ func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Security: Add security headers
+		// Security: Add comprehensive security headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
 
 		start := time.Now()
@@ -538,4 +554,37 @@ func (s *Server) setHealthy(healthy bool) {
 	} else {
 		log.Printf("[INFO] Server health status changed to healthy")
 	}
+}
+
+// constantTimeCompare performs constant-time string comparison to prevent timing attacks.
+func constantTimeCompare(a, b string) bool {
+	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// isValidHardwareID validates that a hardware ID contains only safe characters.
+func isValidHardwareID(id string) bool {
+	// Allow alphanumeric, hyphens, underscores, and dots (common in UUIDs and machine IDs)
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return len(id) > 0
+}
+
+// isValidCheckName validates that a check name contains only safe characters.
+func isValidCheckName(name string) bool {
+	// Allow alphanumeric, hyphens, and underscores only
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_') {
+			return false
+		}
+	}
+	return len(name) > 0
 }

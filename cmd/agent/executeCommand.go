@@ -14,6 +14,10 @@ import (
 )
 
 // executeCommandWithPipes executes a command and captures stdout/stderr separately.
+// SECURITY: Commands come from checks.yaml which must be controlled by the system admin.
+// Bash restricted mode (-r) prevents: cd, PATH changes, output redirection, running programs
+// with / in name. Complex shell operations (pipes, grep, awk) are still allowed by design
+// as they're needed for compliance checks. The agent runs with user privileges only.
 func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) types.Check {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
@@ -24,6 +28,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	}
 
 	// Use bash -r for restricted mode security
+	// Security: This is as safe as we can make arbitrary command execution
 	cmd := exec.CommandContext(ctx, "bash", "-r", "-c", command)
 
 	// Capture stdout

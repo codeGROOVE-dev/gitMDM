@@ -15,71 +15,68 @@ checks:
     openbsd: cat /etc/passwd
 
   network:
-    linux: ip addr show 2>/dev/null || ifconfig -a
-    darwin: ifconfig -a
-    freebsd: ifconfig -a
-    openbsd: ifconfig -a
+    linux: ip addr show  | grep -E "^[0-9]+:|inet " | grep -v "127.0.0.1"
+    darwin: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
+    freebsd: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
+    openbsd: ifconfig -a | grep -E "^[a-z]|inet " | grep -v "127.0.0.1"
 
   diskencryption:
-    linux: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE 2>/dev/null | grep -v loop
-    darwin: diskutil apfs list | grep -E "(Encryption|Volume|Role)" | head -20
-    freebsd: geli status 2>/dev/null || echo "GELI not configured"
-    openbsd: bioctl -i softraid0 2>/dev/null || echo "No encrypted volumes"
+    linux: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE  | grep -v loop
+    darwin: diskutil info / | grep -E "(Encrypted|FileVault|Encryption)" || echo "Encryption status unknown"
+    freebsd: geli status  || echo "GELI not configured"
+    openbsd: bioctl -i softraid0  || echo "No encrypted volumes"
 
   firewall:
-    linux: iptables -L -n 2>/dev/null | head -50 || echo "Firewall not accessible"
-    darwin: pfctl -s rules 2>/dev/null | head -20 || echo "Firewall not accessible"
-    freebsd: pfctl -s rules 2>/dev/null | head -20 || echo "Firewall not accessible"
-    openbsd: pfctl -s rules 2>/dev/null | head -20 || echo "Firewall not accessible"
+    linux: iptables -L -n  | grep -E "^Chain|policy" || echo "Firewall not accessible"
+    darwin: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
+    freebsd: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
+    openbsd: pfctl -sr  | wc -l | awk '{print $1 " firewall rules active"}' || echo "Firewall not accessible"
 
   screensaver:
     linux: |
-      gsettings get org.gnome.desktop.screensaver lock-enabled 2>/dev/null ||
-      xset q 2>/dev/null | grep -A2 "Screen Saver" ||
+      gsettings get org.gnome.desktop.screensaver lock-enabled  ||
+      xset q  | grep -A2 "Screen Saver" ||
       echo "Screensaver settings not accessible"
     darwin: |
-      defaults read com.apple.screensaver askForPassword 2>/dev/null &&
-      defaults read com.apple.screensaver askForPasswordDelay 2>/dev/null ||
+      defaults read com.apple.screensaver askForPassword  &&
+      defaults read com.apple.screensaver askForPasswordDelay  ||
       echo "Not configured"
 
   passwordpolicy:
     linux: |
-      grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs 2>/dev/null ||
+      grep -E "^PASS_MAX_DAYS|^PASS_MIN_DAYS|^PASS_MIN_LEN|^PASS_WARN_AGE" /etc/login.defs  ||
       echo "Password policy not configured"
-    darwin: pwpolicy getaccountpolicies 2>/dev/null | head -50 || echo "Password policy not accessible"
-    freebsd: grep -E "^password" /etc/pam.d/system 2>/dev/null || echo "PAM not configured"
-    openbsd: grep -E "^password" /etc/login.conf 2>/dev/null | head -20 || echo "Login config not found"
+    darwin: pwpolicy getaccountpolicies  | head -50 || echo "Password policy not accessible"
+    freebsd: grep -E "^password" /etc/pam.d/system  || echo "PAM not configured"
+    openbsd: grep -E "^password" /etc/login.conf  | head -20 || echo "Login config not found"
 
   updates:
     linux: |
-      apt list --upgradable 2>/dev/null | head -20 ||
-      yum check-update 2>/dev/null | head -20 ||
-      dnf check-update 2>/dev/null | head -20 ||
+      apt list --upgradable  | head -20 ||
+      yum check-update  | head -20 ||
+      dnf check-update  | head -20 ||
       echo "Package manager not found"
-    darwin: softwareupdate -l 2>/dev/null | head -30 || echo "Updates not accessible"
-    freebsd: pkg audit 2>/dev/null | head -20 || echo "pkg audit not available"
-    openbsd: syspatch -c 2>/dev/null || echo "syspatch not available"
+    darwin: softwareupdate -l  | head -30 || echo "Updates not accessible"
+    freebsd: pkg audit  | head -20 || echo "pkg audit not available"
+    openbsd: syspatch -c  || echo "syspatch not available"
 
   antivirus:
     linux: |
-      systemctl status clamav-daemon 2>/dev/null | head -10 ||
-      ps aux | grep -E "(clam|sophos|mcafee|symantec)" | grep -v grep | head -5 ||
+      systemctl is-active clamav-daemon  ||
+      pgrep -l "(clam|sophos|mcafee|symantec)"  | head -5 ||
       echo "No antivirus detected"
     darwin: |
-      ps aux | grep -E "(XProtect|MRT|Sophos|McAfee|Symantec)" | grep -v grep | head -5 ||
+      pgrep -l "(XProtect|MRT|Sophos|McAfee|Symantec)"  | head -5 ||
       echo "No antivirus detected"
 
   audit:
-    linux: auditctl -l 2>/dev/null | head -20 || echo "Audit not configured"
-    darwin: audit -s 2>/dev/null || echo "Audit not accessible"
-    freebsd: auditctl -l 2>/dev/null | head -20 || echo "Audit not configured"
+    linux: auditctl -l  | head -20 || echo "Audit not configured"
+    darwin: audit -s  || echo "Audit not accessible"
+    freebsd: auditctl -l  | head -20 || echo "Audit not configured"
     openbsd: echo "Audit subsystem check not implemented"
 
-  processes:
-    all: ps aux | head -30
-
   systeminfo:
-    linux: hostnamectl 2>/dev/null || cat /etc/os-release 2>/dev/null || echo "System info not available"
-    darwin: system_profiler SPSoftwareDataType
+    linux: cat /etc/os-release  | grep -E "^(NAME|VERSION|ID)" || echo "System info not available"
+    darwin: sw_vers
     freebsd: freebsd-version
-    openbsd: sysctl kern.version
+    openbsd: uname -rsv

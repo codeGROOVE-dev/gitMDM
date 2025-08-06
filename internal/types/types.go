@@ -14,8 +14,10 @@ type Device struct {
 
 // Check represents a single compliance check result.
 type Check struct {
-	Command string `json:"command"`
-	Output  string `json:"output"`
+	Command  string `json:"command"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
 }
 
 // DeviceReport represents a compliance report sent by an agent.

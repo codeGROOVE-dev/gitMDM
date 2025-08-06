@@ -48,7 +48,8 @@ const (
 var templates embed.FS
 
 var (
-	gitURL = flag.String("git", "", "Git repository URL (required)")
+	gitURL = flag.String("git", "", "Git repository URL or path to clone to temp directory")
+	clone  = flag.String("clone", "", "Path to existing local git clone to work in directly")
 	port   = flag.String("port", "8080", "Server port")
 	apiKey = flag.String("api-key", "", "API key for authentication (optional but recommended)")
 )
@@ -69,13 +70,26 @@ type Server struct {
 func main() {
 	flag.Parse()
 
-	if *gitURL == "" {
-		log.Fatal("Git repository URL is required (use -git flag)")
+	if *gitURL == "" && *clone == "" {
+		log.Fatal("Either -git (repository to clone) or -clone (existing local clone) is required")
+	}
+	if *gitURL != "" && *clone != "" {
+		log.Fatal("Cannot specify both -git and -clone")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	store, err := gitstore.New(ctx, *gitURL)
+	var store *gitstore.Store
+	var err error
+	
+	if *clone != "" {
+		// Use existing local clone directly (no push/pull)
+		store, err = gitstore.NewLocal(ctx, *clone)
+	} else {
+		// Clone repository to temp directory (with push/pull)
+		store, err = gitstore.NewRemote(ctx, *gitURL)
+	}
+	
 	if err != nil {
 		cancel() // Cancel context before fatal exit
 		log.Fatalf("[ERROR] Failed to initialize git store: %v", err)
@@ -322,19 +336,23 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 			http.Error(writer, "Check name too long", http.StatusBadRequest)
 			return
 		}
-		if len(check.Output) > maxCheckOutput {
+		// Check combined output size (stdout + stderr)
+		totalOutput := len(check.Stdout) + len(check.Stderr)
+		if totalOutput > maxCheckOutput {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check output too large from %s: %s (%d bytes)", request.RemoteAddr, name, len(check.Output))
+			log.Printf("[WARN] Check output too large from %s: %s (stdout: %d, stderr: %d, total: %d bytes)", 
+				request.RemoteAddr, name, len(check.Stdout), len(check.Stderr), totalOutput)
 			http.Error(writer, "Check output too large", http.StatusBadRequest)
 			return
 		}
 	}
 
+	now := time.Now()
 	device := &types.Device{
 		HardwareID: report.HardwareID,
 		Hostname:   report.Hostname,
 		User:       report.User,
-		LastSeen:   time.Now(),
+		LastSeen:   now,
 		Checks:     report.Checks,
 	}
 

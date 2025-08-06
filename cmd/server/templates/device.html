@@ -34,7 +34,13 @@
     <div class="check">
         <h3>{{$name}}</h3>
         <div class="command">Command: {{$check.Command}}</div>
-        <pre>{{$check.Output}}</pre>
+        <pre>{{$check.Stdout}}</pre>
+        {{if $check.Stderr}}
+        <div class="stderr">Stderr: <pre>{{$check.Stderr}}</pre></div>
+        {{end}}
+        {{if ne $check.ExitCode 0}}
+        <div class="exit-code">Exit Code: {{$check.ExitCode}}</div>
+        {{end}}
     </div>
     {{else}}
     <p>No checks available</p>

@@ -261,22 +261,19 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]types.Check {
 			continue
 		}
 
-		output := a.executeCommand(ctx, command)
-		checks[checkName] = types.Check{
-			Command: command,
-			Output:  output,
-		}
+		check := a.executeCommandWithName(ctx, checkName, command)
+		checks[checkName] = check
 
-		// Determine if check succeeded based on output
-		if strings.Contains(output, "Command timed out") || strings.Contains(output, "not found") {
+		// Determine if check succeeded based on exit code
+		if check.ExitCode != 0 {
 			failureCount++
 			if *debug {
-				log.Printf("[DEBUG] Check %s failed in %v: %s", checkName, time.Since(checkStart), command)
+				log.Printf("[DEBUG] Check %s failed (exit %d) in %v: %s", checkName, check.ExitCode, time.Since(checkStart), command)
 			}
 		} else {
 			successCount++
 			if *debug {
-				log.Printf("[DEBUG] Check %s completed in %v: %s", checkName, time.Since(checkStart), command)
+				log.Printf("[DEBUG] Check %s completed successfully in %v: %s", checkName, time.Since(checkStart), command)
 			}
 		}
 	}
@@ -304,64 +301,26 @@ func (a *Agent) runSingleCheck(checkName string) string {
 		return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
 	}
 
-	return a.executeCommand(context.Background(), command)
+	check := a.executeCommand(context.Background(), command)
+	// For single check output, combine stdout and stderr for display
+	output := check.Stdout
+	if check.Stderr != "" {
+		output += "\n--- STDERR ---\n" + check.Stderr
+	}
+	if check.ExitCode != 0 {
+		output += fmt.Sprintf("\n--- EXIT CODE: %d ---", check.ExitCode)
+	}
+	return output
 }
 
-func (*Agent) executeCommand(ctx context.Context, command string) string {
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
+func (a *Agent) executeCommand(ctx context.Context, command string) types.Check {
+	// Use the new implementation that captures stdout/stderr separately
+	return a.executeCommandWithPipes(ctx, "", command)
+}
 
-	if *debug {
-		log.Printf("[DEBUG] Executing command: %s", command)
-	}
-
-	// Security: Use bash with restricted mode for better security
-	// -r: restricted shell (prevents cd, PATH changes, etc)
-	// -c: command to execute
-	cmd := exec.CommandContext(ctx, "bash", "-r", "-c", command)
-
-	// Execute command with output limit
-	rawOutput, err := cmd.CombinedOutput()
-	duration := time.Since(start)
-
-	// Security: Limit output to prevent memory exhaustion
-	var output []byte
-	truncated := false
-	if len(rawOutput) > maxOutputSize {
-		output = rawOutput[:maxOutputSize]
-		output = append(output, []byte("\n[Output truncated to 10KB]...")...)
-		truncated = true
-	} else {
-		output = rawOutput
-	}
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[WARN] Command timed out after %v: %s", duration, command)
-			return "Command timed out"
-		}
-		// Log command execution errors but continue gracefully
-		if *debug {
-			log.Printf("[DEBUG] Command failed in %v (exit code non-zero): %s", duration, command)
-		}
-		// Return output even on error for debugging
-		return string(output)
-	}
-
-	if *debug {
-		log.Printf("[DEBUG] Command completed in %v (output: %d bytes%s): %s",
-			duration, len(output),
-			func() string {
-				if truncated {
-					return ", truncated"
-				}
-				return ""
-			}(),
-			command)
-	}
-
-	return string(output)
+func (a *Agent) executeCommandWithName(ctx context.Context, checkName, command string) types.Check {
+	// Use the new implementation that captures stdout/stderr separately
+	return a.executeCommandWithPipes(ctx, checkName, command)
 }
 
 func hardwareID() string {

@@ -43,8 +43,59 @@ type Store struct {
 	mu       sync.Mutex
 }
 
-// New creates a new Git-based store for device compliance data.
-func New(ctx context.Context, gitURL string) (*Store, error) {
+// isLocalRepo returns true if this is a local repository (not remote)
+func (s *Store) isLocalRepo() bool {
+	// If gitURL equals repoPath, it's a local repo (set during initialization)
+	return s.gitURL == s.repoPath
+}
+
+// NewLocal creates a store using an existing local git clone.
+// It will work directly in the repository and perform push/pull if a remote is configured.
+func NewLocal(ctx context.Context, localPath string) (*Store, error) {
+	absPath, err := filepath.Abs(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	// Check if it's a valid git repository
+	if _, err := os.Stat(filepath.Join(absPath, ".git")); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("not a git repository: %s", absPath)
+		}
+		return nil, fmt.Errorf("failed to check git repository: %w", err)
+	}
+
+	s := &Store{
+		repoPath: absPath,
+	}
+
+	// Check if remote is configured
+	s.mu.Lock()
+	output, err := s.runGitCommandOutput(ctx, "remote", "-v")
+	s.mu.Unlock()
+	
+	if err == nil && strings.TrimSpace(output) != "" {
+		// Has remote configured - enable push/pull
+		s.gitURL = "remote"
+		log.Printf("[INFO] Git store initialized with local clone: %s (remote configured, will push/pull)", absPath)
+	} else {
+		// No remote - work locally only
+		s.gitURL = absPath
+		log.Printf("[INFO] Git store initialized with local clone: %s (no remote, local only)", absPath)
+	}
+
+	// Create devices directory if it doesn't exist
+	devicesDir := filepath.Join(s.repoPath, "devices")
+	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
+		return nil, fmt.Errorf("failed to create devices directory: %w", err)
+	}
+
+	return s, nil
+}
+
+// NewRemote creates a store by cloning a repository to a temp directory.
+// It will perform push/pull operations with the remote.
+func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("gitmdm-%d", time.Now().Unix()))
 
 	s := &Store{
@@ -52,7 +103,7 @@ func New(ctx context.Context, gitURL string) (*Store, error) {
 		gitURL:   gitURL,
 	}
 
-	if err := s.initialize(ctx); err != nil {
+	if err := s.initializeRemote(ctx); err != nil {
 		return nil, fmt.Errorf("failed to initialize git store: %w", err)
 	}
 
@@ -60,45 +111,31 @@ func New(ctx context.Context, gitURL string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) initialize(ctx context.Context) error {
+// Deprecated: Use NewLocal or NewRemote instead
+func New(ctx context.Context, gitURL string) (*Store, error) {
+	// For backward compatibility, treat as remote
+	return NewRemote(ctx, gitURL)
+}
+
+func (s *Store) initializeRemote(ctx context.Context) error {
 	start := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	log.Printf("[INFO] Initializing git store for URL: %s", s.gitURL)
-
-	if strings.HasPrefix(s.gitURL, "/") || strings.HasPrefix(s.gitURL, "./") {
-		s.repoPath = s.gitURL
-		log.Printf("[INFO] Using local repository: %s", s.repoPath)
-
-		if _, err := os.Stat(filepath.Join(s.repoPath, ".git")); os.IsNotExist(err) {
-			log.Printf("[INFO] Initializing new local git repository")
-			if err := s.runGitCommandWithRetry(ctx, "init"); err != nil {
-				return fmt.Errorf("failed to init local repository: %w", err)
-			}
-			if err := s.runGitCommandWithRetry(ctx, "config", "user.email", "gitmdm@localhost"); err != nil {
-				return err
-			}
-			if err := s.runGitCommandWithRetry(ctx, "config", "user.name", "gitMDM"); err != nil {
-				return err
-			}
-			log.Printf("[INFO] Local git repository initialized")
-		} else {
-			log.Printf("[INFO] Using existing local git repository")
-		}
-	} else {
-		log.Printf("[INFO] Cloning remote repository: %s", s.gitURL)
-		if err := s.runGitCommandInDirWithRetry(ctx, "", "clone", s.gitURL, s.repoPath); err != nil {
-			return fmt.Errorf("failed to clone repository: %w", err)
-		}
-		if err := s.runGitCommandWithRetry(ctx, "config", "user.email", "gitmdm@localhost"); err != nil {
-			return err
-		}
-		if err := s.runGitCommandWithRetry(ctx, "config", "user.name", "gitMDM"); err != nil {
-			return err
-		}
-		log.Printf("[INFO] Remote repository cloned successfully")
+	log.Printf("[INFO] Cloning repository: %s to %s", s.gitURL, s.repoPath)
+	
+	if err := s.runGitCommandInDirWithRetry(ctx, "", "clone", s.gitURL, s.repoPath); err != nil {
+		return fmt.Errorf("failed to clone repository: %w", err)
 	}
+	
+	if err := s.runGitCommandWithRetry(ctx, "config", "user.email", "gitmdm@localhost"); err != nil {
+		return err
+	}
+	if err := s.runGitCommandWithRetry(ctx, "config", "user.name", "gitMDM"); err != nil {
+		return err
+	}
+	
+	log.Printf("[INFO] Repository cloned successfully")
 
 	devicesDir := filepath.Join(s.repoPath, "devices")
 	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
@@ -118,7 +155,7 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 	sanitizedID := sanitizeID(device.HardwareID)
 	deviceDir := filepath.Join(s.repoPath, "devices", sanitizedID)
 
-	log.Printf("[DEBUG] Saving device %s (%d checks) to %s", device.HardwareID, len(device.Checks), deviceDir)
+	log.Printf("[INFO] Processing device %s with %d checks", device.HardwareID, len(device.Checks))
 
 	// Security: Verify the path stays within repo bounds
 	absDeviceDir, err := filepath.Abs(deviceDir)
@@ -137,26 +174,61 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 		return fmt.Errorf("failed to create device directory: %w", err)
 	}
 
-	infoPath := filepath.Join(deviceDir, "info.json")
-	infoData, err := json.MarshalIndent(map[string]any{
-		"hardware_id": device.HardwareID,
-		"hostname":    device.Hostname,
-		"user":        device.User,
-		"last_seen":   device.LastSeen,
-	}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal device info: %w", err)
-	}
-
-	if err := os.WriteFile(infoPath, infoData, infoFilePerm); err != nil {
-		return fmt.Errorf("failed to write device info: %w", err)
-	}
-
 	changesCount := 0
+	
+	// Check if info.json needs updating (excluding last_seen which is tracked in memory)
+	infoPath := filepath.Join(deviceDir, "info.json")
+	
+	// Read existing info to check if we need to update
+	needsInfoUpdate := false
+	existingInfo, err := os.ReadFile(infoPath)
+	if err != nil {
+		// File doesn't exist, needs update
+		needsInfoUpdate = true
+	} else {
+		// Parse existing info to check if basic info changed
+		var existing struct {
+			HardwareID string `json:"hardware_id"`
+			Hostname   string `json:"hostname"`
+			User       string `json:"user"`
+		}
+		if err := json.Unmarshal(existingInfo, &existing); err != nil {
+			needsInfoUpdate = true
+		} else {
+			// Update only if basic info changed (NOT last_seen)
+			if existing.HardwareID != device.HardwareID ||
+				existing.Hostname != device.Hostname ||
+				existing.User != device.User {
+				needsInfoUpdate = true
+			}
+		}
+	}
+	
+	if needsInfoUpdate {
+		// Don't store last_seen in git - it's tracked in memory
+		infoData, err := json.MarshalIndent(map[string]any{
+			"hardware_id": device.HardwareID,
+			"hostname":    device.Hostname,
+			"user":        device.User,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal device info: %w", err)
+		}
+		
+		if err := os.WriteFile(infoPath, infoData, infoFilePerm); err != nil {
+			return fmt.Errorf("failed to write device info: %w", err)
+		}
+		changesCount++
+	}
 	for checkName, check := range device.Checks {
-		checkPath := filepath.Join(deviceDir, fmt.Sprintf("%s.md", sanitizeID(checkName)))
+		checkPath := filepath.Join(deviceDir, fmt.Sprintf("%s.json", sanitizeID(checkName)))
 
-		content := fmt.Sprintf("# %s\n\n```\n%s\n```\n", check.Command, check.Output)
+		// Marshal check to JSON
+		checkData, err := json.MarshalIndent(check, "", "  ")
+		if err != nil {
+			log.Printf("[WARN] Failed to marshal check %s for device %s: %v", checkName, device.HardwareID, err)
+			continue
+		}
 
 		existingContent, err := os.ReadFile(checkPath)
 		if err != nil {
@@ -164,18 +236,27 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 			existingContent = nil
 		}
 		existingHash := sha256.Sum256(existingContent)
-		newHash := sha256.Sum256([]byte(content))
+		newHash := sha256.Sum256(checkData)
 
 		if existingHash != newHash {
 			changesCount++
-			if err := os.WriteFile(checkPath, []byte(content), checkFilePerm); err != nil {
+			if err := os.WriteFile(checkPath, checkData, checkFilePerm); err != nil {
 				log.Printf("[WARN] Failed to write check %s for device %s: %v", checkName, device.HardwareID, err)
 				continue
 			}
+			// Log what's being saved
+			log.Printf("[DEBUG] Updated %s: stdout=%d bytes, stderr=%d bytes, exit=%d", 
+				checkPath, len(check.Stdout), len(check.Stderr), check.ExitCode)
 		}
 	}
 
 	log.Printf("[DEBUG] Device %s: %d checks updated", device.HardwareID, changesCount)
+
+	// Skip git operations if nothing changed
+	if changesCount == 0 {
+		log.Printf("[DEBUG] Device %s: no changes detected, skipping git operations", device.HardwareID)
+		return nil
+	}
 
 	// Git operations with retry logic
 	if err := retry.Do(func() error {
@@ -203,7 +284,7 @@ func (s *Store) SaveDevice(ctx context.Context, device *types.Device) error {
 			return nil
 		}
 
-		if !strings.HasPrefix(s.gitURL, "/") && !strings.HasPrefix(s.gitURL, "./") {
+		if !s.isLocalRepo() {
 			if err := retry.Do(func() error {
 				return s.runGitCommand(ctx, "push")
 			}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
@@ -231,7 +312,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]*types.Device, error) {
 
 	log.Printf("[DEBUG] Loading devices from git repository")
 
-	if !strings.HasPrefix(s.gitURL, "/") && !strings.HasPrefix(s.gitURL, "./") {
+	if !s.isLocalRepo() {
 		log.Printf("[DEBUG] Pulling latest changes from remote repository")
 		if err := retry.Do(func() error {
 			return s.runGitCommand(ctx, "pull")
@@ -285,10 +366,9 @@ func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, er
 	}
 
 	var info struct {
-		LastSeen   time.Time `json:"last_seen"`
-		HardwareID string    `json:"hardware_id"`
-		Hostname   string    `json:"hostname"`
-		User       string    `json:"user"`
+		HardwareID string `json:"hardware_id"`
+		Hostname   string `json:"hostname"`
+		User       string `json:"user"`
 	}
 	if err := json.Unmarshal(infoData, &info); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal device info: %w", err)
@@ -298,56 +378,49 @@ func (s *Store) loadDevice(_ context.Context, dirName string) (*types.Device, er
 		HardwareID: info.HardwareID,
 		Hostname:   info.Hostname,
 		User:       info.User,
-		LastSeen:   info.LastSeen,
+		LastSeen:   time.Time{}, // Will be set from file timestamps
 		Checks:     make(map[string]types.Check),
 	}
 
+	// Get last_seen from the most recent file modification time in the directory
 	entries, err := os.ReadDir(deviceDir)
 	if err != nil {
 		return device, err
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") || entry.Name() == "info.json" {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 
-		checkName := strings.TrimSuffix(entry.Name(), ".md")
-		checkPath := filepath.Join(deviceDir, entry.Name())
+		filePath := filepath.Join(deviceDir, entry.Name())
+		
+		// Track the most recent modification time
+		if stat, err := os.Stat(filePath); err == nil {
+			if stat.ModTime().After(device.LastSeen) {
+				device.LastSeen = stat.ModTime()
+			}
+		}
+		
+		// Skip loading info.json as check (already loaded above)
+		if entry.Name() == "info.json" {
+			continue
+		}
 
-		content, err := os.ReadFile(checkPath)
+		checkName := strings.TrimSuffix(entry.Name(), ".json")
+		content, err := os.ReadFile(filePath)
 		if err != nil {
 			log.Printf("Failed to read check %s: %v", checkName, err)
 			continue
 		}
 
-		lines := strings.Split(string(content), "\n")
-		var command, output string
-		var inOutput bool
-
-		for _, line := range lines {
-			switch {
-			case strings.HasPrefix(line, "# "):
-				command = strings.TrimPrefix(line, "# ")
-			case line == "```":
-				if inOutput {
-					return device, nil // Early return to exit the loop properly
-				}
-				inOutput = true
-			case inOutput:
-				if output != "" {
-					output += "\n"
-				}
-				output += line
-			default:
-				// Do nothing for other lines
-			}
+		var check types.Check
+		if err := json.Unmarshal(content, &check); err != nil {
+			log.Printf("Failed to unmarshal check %s: %v", checkName, err)
+			continue
 		}
 
-		device.Checks[checkName] = types.Check{
-			Command: command,
-			Output:  output,
-		}
+		device.Checks[checkName] = check
 	}
 
 	return device, nil
@@ -414,6 +487,10 @@ func (s *Store) runGitCommandOutput(ctx context.Context, args ...string) (string
 }
 
 func sanitizeID(id string) string {
+	// Security: Prevent path traversal by removing dangerous characters
+	// Also prevent relative path components
+	id = strings.ReplaceAll(id, "..", "")
+	id = strings.ReplaceAll(id, "./", "")
 	id = strings.ReplaceAll(id, "/", replacementChar)
 	id = strings.ReplaceAll(id, "\\", replacementChar)
 	id = strings.ReplaceAll(id, ":", replacementChar)
@@ -424,5 +501,17 @@ func sanitizeID(id string) string {
 	id = strings.ReplaceAll(id, ">", replacementChar)
 	id = strings.ReplaceAll(id, "|", replacementChar)
 	id = strings.ReplaceAll(id, " ", replacementChar)
+	id = strings.ReplaceAll(id, "\x00", replacementChar) // Null bytes
+
+	// Ensure ID is not empty after sanitization
+	if id == "" || id == "-" || id == "--" {
+		id = "unknown"
+	}
+
+	// Limit length to prevent filesystem issues
+	if len(id) > 255 {
+		id = id[:255]
+	}
+
 	return id
 }

@@ -1,0 +1,239 @@
+## Golden config for golangci-lint - strict, but within the realm of what Go authors might use.
+#
+# This is tied to the version of golangci-lint listed in the Makefile, usage with other
+# versions of golangci-lint will yield errors and/or false positives.
+#
+# Docs: https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
+# Based heavily on https://gist.github.com/maratori/47a4d00457a92aa426dbd48a18776322
+
+version: "2"
+
+issues:
+  # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
+  max-issues-per-linter: 0
+  # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
+  max-same-issues: 0
+
+formatters:
+  enable:
+    # - gci
+    # - gofmt
+    - gofumpt
+    # - goimports
+    # - golines
+    - swaggo
+
+  settings:
+    golines:
+      # Default: 100
+      max-len: 120
+
+linters:
+  default: all
+  disable:
+    # linters that give advice contrary to what the Go authors advise
+    - decorder # checks declaration order and count of types, constants, variables and functions
+    - dupword # [useless without config] checks for duplicate words in the source code
+    - exhaustruct # [highly recommend to enable] checks if all structure fields are initialized
+    - forcetypeassert # [replaced by errcheck] finds forced type assertions
+    - ginkgolinter # [if you use ginkgo/gomega] enforces standards of using ginkgo and gomega
+    - gochecknoglobals # checks that no global variables exist
+    - cyclop # replaced by revive
+    - gocyclo # replaced by revive
+    - funlen # replaced by revive
+    - godox # TODO's are OK
+    - ireturn # It's OK
+    - musttag
+    - nonamedreturns
+    - goconst # finds repeated strings that could be replaced by a constant
+    - goheader # checks is file header matches to pattern
+    - gomodguard # [use more powerful depguard] allow and block lists linter for direct Go module dependencies
+    - gomoddirectives
+    - err113 # bad advice about dynamic errors
+    - lll # [replaced by golines] reports long lines
+    - mnd # detects magic numbers, duplicated by revive
+    - nlreturn # [too strict and mostly code is not more readable] checks for a new line before return and branch statements to increase code clarity
+    - noinlineerr # disallows inline error handling `if err := ...; err != nil {`
+    - prealloc # [premature optimization, but can be used in some cases] finds slice declarations that could potentially be preallocated
+    - tagliatelle # needs configuration
+    - testableexamples # checks if examples are testable (have an expected output)
+    - testpackage # makes you use a separate _test package
+    - paralleltest # not every test should be in parallel
+    - wrapcheck # not required
+    - wsl # [too strict and mostly code is not more readable] whitespace linter forces you to use empty lines
+    - wsl_v5 # [too strict and mostly code is not more readable] add or remove empty lines
+    - zerologlint # detects the wrong usage of zerolog that a user forgets to dispatch zerolog.Event
+
+  # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
+  settings:
+    depguard:
+      rules:
+        "deprecated":
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/golang/protobuf
+              desc: Use google.golang.org/protobuf instead, see https://developers.google.com/protocol-buffers/docs/reference/go/faq#modules
+            - pkg: github.com/satori/go.uuid
+              desc: Use github.com/google/uuid instead, satori's package is not maintained
+            - pkg: github.com/gofrs/uuid$
+              desc: Use github.com/gofrs/uuid/v5 or later, it was not a go module before v5
+        "non-test files":
+          files:
+            - "!$test"
+          deny:
+            - pkg: math/rand$
+              desc: Use math/rand/v2 instead, see https://go.dev/blog/randv2
+            - pkg: "github.com/sirupsen/logrus"
+              desc: not allowed
+            - pkg: "github.com/pkg/errors"
+              desc: Should be replaced by standard lib errors package
+
+    dupl:
+      # token count (default: 150)
+      threshold: 300
+
+    embeddedstructfieldcheck:
+      # Checks that sync.Mutex and sync.RWMutex are not used as embedded fields.
+      forbid-mutex: true
+
+    errcheck:
+      # Report about not checking of errors in type assertions: `a := b.(MyStruct)`.
+      check-type-assertions: true
+      check-blank: true
+
+    exhaustive:
+      # Program elements to check for exhaustiveness.
+      # Default: [ switch ]
+      check:
+        - switch
+        - map
+      default-signifies-exhaustive: true
+
+    fatcontext:
+      # Check for potential fat contexts in struct pointers.
+      # May generate false positives.
+      # Default: false
+      check-struct-pointers: true
+
+    funcorder:
+      # Checks if the exported methods of a structure are placed before the non-exported ones.
+      struct-method: false
+
+    gocognit:
+      min-complexity: 55
+
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        - paramTypeCombine
+      # The list of supported checkers can be found at https://go-critic.com/overview.
+      settings:
+        captLocal:
+          # Whether to restrict checker to params only.
+          paramsOnly: false
+        underef:
+          # Whether to skip (*x).method() calls where x is a pointer receiver.
+          skipRecvDeref: false
+        hugeParam:
+          # Default: 80
+          sizeThreshold: 200
+
+    govet:
+      enable-all: true
+
+    godot:
+      scope: toplevel
+
+    inamedparam:
+      # Skips check for interface methods with only a single parameter.
+      skip-single-param: true
+
+    nakedret:
+      # Default: 30
+      max-func-lines: 4
+
+    nestif:
+      min-complexity: 12
+
+    nolintlint:
+      # Exclude following linters from requiring an explanation.
+      # Default: []
+      allow-no-explanation: [funlen, gocognit, golines]
+      # Enable to require an explanation of nonzero length after each nolint directive.
+      require-explanation: true
+      # Enable to require nolint directives to mention the specific linter being suppressed.
+      require-specific: true
+
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: add-constant
+          severity: warning
+          disabled: false
+          exclude: [""]
+          arguments:
+            - max-lit-count: "5"
+              allow-strs: '"","\n"'
+              allow-ints: "0,1,2,3,24,30,365,1024,0o600,0o700,0o750,0o755"
+              allow-floats: "0.0,0.,1.0,1.,2.0,2."
+        - name: cognitive-complexity
+          arguments: [55]
+        - name: cyclomatic
+          arguments: [60]
+        - name: function-length
+          arguments: [150, 225]
+        - name: line-length-limit
+          arguments: [150]
+        - name: nested-structs
+          disabled: true
+        - name: max-public-structs
+          arguments: [10]
+        - name: flag-parameter # fixes are difficult
+          disabled: true
+
+    rowserrcheck:
+      # database/sql is always checked.
+      # Default: []
+      packages:
+        - github.com/jmoiron/sqlx
+
+    perfsprint:
+      # optimize fmt.Sprintf("x: %s", y) into "x: " + y
+      strconcat: false
+
+    staticcheck:
+      checks:
+        - all
+
+    usetesting:
+      # Enable/disable `os.TempDir()` detections.
+      # Default: false
+      os-temp-dir: true
+
+    varnamelen:
+      max-distance: 40
+      min-name-length: 2
+
+  exclusions:
+    # Default: []
+    presets:
+      - common-false-positives
+    rules:
+      # Allow "err" and "ok" vars to shadow existing declarations, otherwise we get too many false positives.
+      - text: '^shadow: declaration of "(err|ok)" shadows declaration'
+        linters:
+          - govet
+      - text: "parameter 'ctx' seems to be unused, consider removing or renaming it as _"
+        linters:
+          - revive
+      - path: _test\.go
+        linters:
+          - dupl
+          - gosec
+          - godot
+          - govet # alignment
+          - noctx
+          - perfsprint
+          - revive
+          - varnamelen

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Device: {{.HardwareID}}</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #fff; }
+        h1, h2 { font-size: 20px; margin: 20px 0 10px 0; }
+        a { color: #0000ee; text-decoration: underline; }
+        .info { margin-bottom: 30px; }
+        .info p { margin: 5px 0; }
+        .check { margin-bottom: 30px; border-top: 1px solid #ccc; padding-top: 15px; }
+        .check h3 { font-size: 16px; margin: 10px 0; background: #f0f0f0; padding: 5px; }
+        .command { color: #666; font-size: 12px; margin: 5px 0; }
+        pre { background: #f8f8f8; padding: 10px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+        .nav { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="/">← Back to devices</a>
+    </div>
+    
+    <h1>Device: {{.HardwareID}}</h1>
+    
+    <div class="info">
+        <p><strong>Hardware ID:</strong> {{.HardwareID}}</p>
+        <p><strong>Hostname:</strong> {{.Hostname}}</p>
+        <p><strong>User:</strong> {{.User}}</p>
+        <p><strong>Last Seen:</strong> {{.LastSeen.Format "2006-01-02 15:04:05"}}</p>
+    </div>
+
+    <h2>Compliance Checks</h2>
+    {{range $name, $check := .Checks}}
+    <div class="check">
+        <h3>{{$name}}</h3>
+        <div class="command">Command: {{$check.Command}}</div>
+        <pre>{{$check.Output}}</pre>
+    </div>
+    {{else}}
+    <p>No checks available</p>
+    {{end}}
+</body>
+</html>

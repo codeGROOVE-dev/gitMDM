@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>gitMDM - Devices</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #fff; }
+        h1 { font-size: 24px; margin-bottom: 20px; }
+        table { border-collapse: collapse; width: 100%; max-width: 1000px; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+        th { background: #f0f0f0; font-weight: bold; }
+        a { color: #0000ee; text-decoration: underline; }
+        a:visited { color: #551a8b; }
+        .status { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>gitMDM - Device Management</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Hardware ID</th>
+                <th>Hostname</th>
+                <th>User</th>
+                <th>Last Seen</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .}}
+            <tr>
+                <td><a href="/device/{{.HardwareID}}">{{.HardwareID}}</a></td>
+                <td>{{.Hostname}}</td>
+                <td>{{.User}}</td>
+                <td class="status">{{.LastSeen.Format "2006-01-02 15:04:05"}}</td>
+            </tr>
+            {{else}}
+            <tr>
+                <td colspan="4">No devices registered</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</body>
+</html>

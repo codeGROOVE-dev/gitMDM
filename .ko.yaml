@@ -1,0 +1,8 @@
+defaultBaseImage: gcr.io/distroless/static:nonroot
+
+builds:
+  - id: gitmdm
+    dir: .
+    main: ./cmd/server
+    env:
+      - CGO_ENABLED=0

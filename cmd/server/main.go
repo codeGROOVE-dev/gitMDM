@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,7 +17,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,7 +38,7 @@ const (
 	// Request validation limits.
 	maxFieldLength  = 255
 	maxCheckName    = 100
-	maxCheckOutput  = 10240       // 10KB per check
+	maxCheckOutput  = 92160       // 90KB per check
 	maxRequestBody  = 1024 * 1024 // 1MB limit
 	maxHeaderBytes  = 1 << 16     // 64KB max header size
 	shutdownTimeout = 10 * time.Second
@@ -42,7 +46,7 @@ const (
 	// Retry configuration for git operations.
 	maxRetries     = 3
 	initialBackoff = 1 * time.Second
-	maxBackoff     = 30 * time.Second
+	maxBackoff     = 2 * time.Minute // Wait up to 2 minutes with exponential backoff
 
 	// Failed reports queue size.
 	failedReportsQueueSize = 1000
@@ -52,10 +56,15 @@ const (
 var templates embed.FS
 
 var (
-	gitURL = flag.String("git", "", "Git repository URL or path to clone to temp directory")
+	gitURL = flag.String("git", os.Getenv("GIT_REPO"), "Git repository URL or path to clone to temp directory (env: GIT_REPO)")
 	clone  = flag.String("clone", "", "Path to existing local git clone to work in directly")
-	port   = flag.String("port", "8080", "Server port")
-	apiKey = flag.String("api-key", "", "API key for authentication (optional but recommended)")
+	port   = flag.String("port", func() string {
+		if p := os.Getenv("PORT"); p != "" {
+			return p
+		}
+		return "8080"
+	}(), "Server port (env: PORT)")
+	joinKey = flag.String("join-key", os.Getenv("JOIN_KEY"), "Join key for agent registration (env: JOIN_KEY)")
 )
 
 // ComplianceCache stores pre-calculated compliance stats for a device.
@@ -74,10 +83,75 @@ type Server struct {
 	failedReports   chan *gitmdm.Device
 	mu              sync.RWMutex
 	healthMu        sync.RWMutex
-	statsmu         sync.RWMutex
+	statsMu         sync.RWMutex
 	requestCount    int64
 	errorCount      int64
 	healthy         bool
+}
+
+// generateJoinKeyFromHardwareID generates a join key from the server's hardware ID.
+func generateJoinKeyFromHardwareID() string {
+	// Get hardware ID similar to agent
+	var id string
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS: Use hardware UUID
+		cmd := exec.Command("system_profiler", "SPHardwareDataType")
+		if output, err := cmd.Output(); err == nil {
+			outputStr := string(output)
+			if idx := strings.Index(outputStr, "Hardware UUID:"); idx != -1 {
+				line := outputStr[idx:]
+				if endIdx := strings.Index(line, "\n"); endIdx != -1 {
+					line = line[:endIdx]
+				}
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					id = parts[2]
+				}
+			}
+		}
+	case "linux":
+		// Linux: Try machine-id first
+		if data, err := os.ReadFile("/etc/machine-id"); err == nil {
+			id = strings.TrimSpace(string(data))
+		} else if data, err := os.ReadFile("/var/lib/dbus/machine-id"); err == nil {
+			id = strings.TrimSpace(string(data))
+		}
+	case "windows":
+		// Windows: Use wmic to get UUID
+		cmd := exec.Command("wmic", "csproduct", "get", "uuid", "/value")
+		if output, err := cmd.Output(); err == nil {
+			outputStr := string(output)
+			if idx := strings.Index(outputStr, "UUID="); idx != -1 {
+				id = strings.TrimSpace(strings.TrimPrefix(outputStr[idx:], "UUID="))
+			}
+		}
+	}
+
+	// Fallback to hostname-based ID
+	if id == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown"
+		}
+		hash := sha256.Sum256([]byte(hostname + runtime.GOOS))
+		id = hex.EncodeToString(hash[:16])
+	}
+
+	// Take last 10 alphanumeric characters for the join key
+	// Remove any non-alphanumeric characters first
+	cleanID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return -1
+	}, id)
+
+	// Take last 10 characters (or full string if shorter)
+	if len(cleanID) > 10 {
+		return strings.ToUpper(cleanID[len(cleanID)-10:])
+	}
+	return strings.ToUpper(cleanID)
 }
 
 func main() {
@@ -113,17 +187,32 @@ func main() {
 		"formatAgo":     formatAgoFunc,
 		"inc":           func(i int) int { return i + 1 },
 		"truncateLines": truncateLinesFunc,
-		"safeID":        func(name string) string {
+		"safeID": func(name string) string {
 			return strings.ReplaceAll(strings.ReplaceAll(name, "_", "-"), ".", "-")
 		},
-		"add":           addFunc,
-		"mul":           mulFunc,
-		"div":           divFunc,
-		"title":         titleFunc,
-		"sub":           func(a, b int) int { return a - b },
+		"sub": func(a, b int) int { return a - b },
+		"add": func(a, b int) int { return a + b },
+		"mul": func(a, b int) int { return a * b },
+		"mulf": func(a, b float64) float64 { return a * b },
+		"div": func(a, b int) int {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
+		"title": func(s string) string {
+			// Convert snake_case to Title Case
+			words := strings.Split(strings.ReplaceAll(s, "_", " "), " ")
+			for i, word := range words {
+				if len(word) > 0 {
+					words[i] = strings.ToUpper(word[:1]) + word[1:]
+				}
+			}
+			return strings.Join(words, " ")
+		},
 	}
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "templates/*.html"))
-	
+
 	server := &Server{
 		store:           store,
 		devices:         make(map[string]*gitmdm.Device),
@@ -141,12 +230,20 @@ func main() {
 	// Start background processors
 	go server.processFailedReports(ctx)
 
-	// Log configuration
-	if *apiKey != "" {
-		log.Println("[INFO] API key authentication enabled")
-	} else {
-		log.Println("[WARN] Running without API key authentication")
+	// Generate join key from hardware ID if not set
+	if *joinKey == "" {
+		*joinKey = generateJoinKeyFromHardwareID()
+		log.Printf("[INFO] Generated join key from hardware ID: %s", *joinKey)
 	}
+
+	// Log configuration
+	log.Println("[INFO] ═══════════════════════════════════════════════════════════════")
+	log.Printf("[INFO] GitMDM Server Started")
+	log.Printf("[INFO] Join Key: %s", *joinKey)
+	log.Printf("[INFO] ")
+	log.Printf("[INFO] To register an agent, run:")
+	log.Printf("[INFO]   ./gitmdm-agent --server http://localhost:%s --join %s", *port, *joinKey)
+	log.Println("[INFO] ═══════════════════════════════════════════════════════════════")
 	log.Printf("[INFO] Retry configuration: max_retries=%d, initial_backoff=%v, max_backoff=%v",
 		maxRetries, initialBackoff, maxBackoff)
 	log.Printf("[INFO] Failed reports queue size: %d", failedReportsQueueSize)
@@ -191,7 +288,6 @@ func main() {
 		log.Println("[INFO] Server shutdown complete")
 	}
 }
-
 
 // Template function implementations
 
@@ -242,68 +338,9 @@ func truncateLinesFunc(text string, maxLines any) string {
 	return truncated + "\n... (output truncated, showing first " + strconv.Itoa(maxLinesInt) + " lines)"
 }
 
-func addFunc(a, b any) any {
-	switch av := a.(type) {
-	case int:
-		if bv, ok := b.(int); ok {
-			return av + bv
-		}
-	case float64:
-		if bv, ok := b.(float64); ok {
-			return av + bv
-		}
-	}
-	return 0
-}
-
-func mulFunc(a, b any) any {
-	switch av := a.(type) {
-	case int:
-		if bv, ok := b.(int); ok {
-			return av * bv
-		}
-		if bv, ok := b.(float64); ok {
-			return float64(av) * bv
-		}
-	case float64:
-		if bv, ok := b.(float64); ok {
-			return av * bv
-		}
-		if bv, ok := b.(int); ok {
-			return av * float64(bv)
-		}
-	}
-	return 0
-}
-
-func divFunc(a, b any) any {
-	switch av := a.(type) {
-	case int:
-		if bv, ok := b.(int); ok && bv != 0 {
-			return av / bv
-		}
-	case float64:
-		if bv, ok := b.(float64); ok && bv != 0 {
-			return av / bv
-		}
-	}
-	return 0
-}
-
-func titleFunc(s string) string {
-	// Replace underscores with spaces and title case each word
-	words := strings.Split(strings.ReplaceAll(s, "_", " "), " ")
-	for i, word := range words {
-		if word != "" {
-			words[i] = strings.ToUpper(word[:1]) + strings.ToLower(word[1:])
-		}
-	}
-	return strings.Join(words, " ")
-}
-
 func (s *Server) loadDevices(ctx context.Context) error {
 	start := time.Now()
-	devices, err := s.store.ListDevices(ctx)
+	devices, err := s.store.LoadDevices(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list devices: %w", err)
 	}
@@ -365,7 +402,7 @@ func (s *Server) processFailedReports(ctx context.Context) {
 					log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
 					err := retry.Do(func() error {
 						return s.store.SaveDevice(ctx, device)
-					}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+					}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 
 					if err != nil {
 						log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
@@ -586,17 +623,15 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	// Security: Check API key if configured
-	if *apiKey != "" {
-		providedKey := request.Header.Get("X-Api-Key")
-		// Security: Don't accept API key from query params (exposes in logs)
-		// Use constant-time comparison to prevent timing attacks
-		if len(providedKey) != len(*apiKey) || subtle.ConstantTimeCompare([]byte(providedKey), []byte(*apiKey)) != 1 {
-			s.incrementErrorCount()
-			log.Printf("[WARN] Unauthorized request from %s", request.RemoteAddr)
-			http.Error(writer, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// Security: Check join key - always required
+	providedKey := request.Header.Get("X-Join-Key")
+	// Security: Don't accept join key from query params (exposes in logs)
+	// Use constant-time comparison to prevent timing attacks
+	if len(providedKey) != len(*joinKey) || subtle.ConstantTimeCompare([]byte(providedKey), []byte(*joinKey)) != 1 {
+		s.incrementErrorCount()
+		log.Printf("[WARN] Unauthorized request from %s - invalid join key", request.RemoteAddr)
+		http.Error(writer, "Unauthorized - invalid join key", http.StatusUnauthorized)
+		return
 	}
 
 	ctx := request.Context()
@@ -638,14 +673,14 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	}
 	if len(report.Hostname) > maxFieldLength {
 		s.incrementErrorCount()
-		log.Printf("[WARN] Hostname too long from %s: %d bytes", request.RemoteAddr, len(report.Hostname))
-		http.Error(writer, "Hostname too long", http.StatusBadRequest)
+		log.Printf("[WARN] Hostname too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.Hostname), maxFieldLength)
+		http.Error(writer, fmt.Sprintf("Hostname too long: %d bytes exceeds %d byte limit", len(report.Hostname), maxFieldLength), http.StatusBadRequest)
 		return
 	}
 	if len(report.User) > maxFieldLength {
 		s.incrementErrorCount()
-		log.Printf("[WARN] Username too long from %s: %d bytes", request.RemoteAddr, len(report.User))
-		http.Error(writer, "Username too long", http.StatusBadRequest)
+		log.Printf("[WARN] Username too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.User), maxFieldLength)
+		http.Error(writer, fmt.Sprintf("Username too long: %d bytes exceeds %d byte limit", len(report.User), maxFieldLength), http.StatusBadRequest)
 		return
 	}
 
@@ -653,8 +688,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	for name, check := range report.Checks {
 		if len(name) > maxCheckName {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check name too long from %s: %d bytes", request.RemoteAddr, len(name))
-			http.Error(writer, "Check name too long", http.StatusBadRequest)
+			log.Printf("[WARN] Check name too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(name), maxCheckName)
+			http.Error(writer, fmt.Sprintf("Check name too long: %d bytes exceeds %d byte limit", len(name), maxCheckName), http.StatusBadRequest)
 			return
 		}
 		// Additional validation: only allow safe characters in check names
@@ -671,9 +706,9 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		}
 		if totalOutput > maxCheckOutput {
 			s.incrementErrorCount()
-			log.Printf("[WARN] Check output too large from %s: %s (%d commands, total: %d bytes)",
-				request.RemoteAddr, name, len(check.Outputs), totalOutput)
-			http.Error(writer, "Check output too large", http.StatusBadRequest)
+			log.Printf("[WARN] Check output too large from %s: %s (%d commands, total: %d bytes, limit: %d bytes)",
+				request.RemoteAddr, name, len(check.Outputs), totalOutput, maxCheckOutput)
+			http.Error(writer, fmt.Sprintf("Check output too large: %d bytes exceeds %d byte limit", totalOutput, maxCheckOutput), http.StatusBadRequest)
 			return
 		}
 	}
@@ -716,7 +751,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	// Attempt to save to git store with graceful degradation
 	err := retry.Do(func() error {
 		return s.store.SaveDevice(ctx, device)
-	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 	if err != nil {
 		log.Printf("[WARN] Failed to save device %s to git store after %d retries: %v", device.HardwareID, maxRetries, err)
 		// Queue for later retry if queue not full
@@ -776,10 +811,10 @@ func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
 	healthy := s.healthy
 	s.healthMu.RUnlock()
 
-	s.statsmu.RLock()
+	s.statsMu.RLock()
 	requestCount := s.requestCount
 	errorCount := s.errorCount
-	s.statsmu.RUnlock()
+	s.statsMu.RUnlock()
 
 	s.mu.RLock()
 	deviceCount := len(s.devices)
@@ -826,13 +861,13 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 // Utility methods for tracking server statistics and health.
 func (s *Server) incrementRequestCount() {
-	s.statsmu.Lock()
+	s.statsMu.Lock()
 	s.requestCount++
-	s.statsmu.Unlock()
+	s.statsMu.Unlock()
 }
 
 func (s *Server) incrementErrorCount() {
-	s.statsmu.Lock()
+	s.statsMu.Lock()
 	s.errorCount++
-	s.statsmu.Unlock()
+	s.statsMu.Unlock()
 }

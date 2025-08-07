@@ -97,13 +97,13 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	stdoutBytes := stdoutBuf.Bytes()
 	stdout := string(stdoutBytes)
 	if len(stdoutBytes) > maxOutputSize {
-		stdout = string(stdoutBytes[:maxOutputSize]) + "\n[Output truncated to 10KB]..."
+		stdout = string(stdoutBytes[:maxOutputSize]) + "\n[Output truncated to 90KB]..."
 	}
 
 	stderrBytes := stderrBuf.Bytes()
 	stderr := string(stderrBytes)
 	if len(stderrBytes) > maxOutputSize {
-		stderr = string(stderrBytes[:maxOutputSize]) + "\n[Output truncated to 10KB]..."
+		stderr = string(stderrBytes[:maxOutputSize]) + "\n[Output truncated to 90KB]..."
 	}
 
 	// Determine exit code

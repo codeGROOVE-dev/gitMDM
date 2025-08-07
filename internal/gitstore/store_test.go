@@ -136,8 +136,8 @@ func TestSaveAndLoadDevice(t *testing.T) {
 		t.Fatalf("Failed to save device: %v", err)
 	}
 
-	// List devices
-	devices, err := store.ListDevices(ctx)
+	// Load devices
+	devices, err := store.LoadDevices(ctx)
 	if err != nil {
 		t.Fatalf("Failed to list devices: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestConcurrentSaves(t *testing.T) {
 	}
 
 	// Verify all devices were saved
-	devices, err := store.ListDevices(ctx)
+	devices, err := store.LoadDevices(ctx)
 	if err != nil {
 		t.Fatalf("Failed to list devices: %v", err)
 	}

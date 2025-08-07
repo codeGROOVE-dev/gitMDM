@@ -73,7 +73,11 @@ func analyzeGDMAutoLogin(output string) Result {
 		return Result{Status: statusNA, Description: "Not GDM output"}
 	}
 
-	configFile := getGDMConfigFile(output)
+	// Determine GDM config file location
+	configFile := "/etc/gdm3/custom.conf"
+	if strings.Contains(output, "/etc/gdm/") {
+		configFile = "/etc/gdm/custom.conf"
+	}
 
 	if strings.Contains(output, "automaticloginenable") {
 		if strings.Contains(output, "automaticloginenable=true") ||
@@ -185,13 +189,6 @@ func analyzeGenericAutoLogin(output string) Result {
 
 func isErrorOutput(output string) bool {
 	return strings.Contains(output, "does not exist") || strings.Contains(output, "error")
-}
-
-func getGDMConfigFile(output string) string {
-	if strings.Contains(output, "/etc/gdm/") {
-		return "/etc/gdm/custom.conf"
-	}
-	return "/etc/gdm3/custom.conf"
 }
 
 func extractGDMAutoLoginUser(output string) string {

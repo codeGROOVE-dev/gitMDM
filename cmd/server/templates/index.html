@@ -313,7 +313,7 @@
                     </div>
                     <div class="compliance-badge">
                         <span class="compliance-score {{if .ComplianceScore}}{{if ge .ComplianceScore 0.9}}status-excellent{{else if ge .ComplianceScore 0.7}}status-good{{else}}status-needs-attention{{end}}{{else}}status-checking{{end}}">
-                            {{if .ComplianceScore}}{{printf "%.0f" (mul .ComplianceScore 100.0)}}%{{else}}—{{end}}
+                            {{if .ComplianceScore}}{{printf "%.0f" (mulf .ComplianceScore 100.0)}}%{{else}}—{{end}}
                         </span>
                         <div class="compliance-label">
                             {{if .ComplianceScore}}

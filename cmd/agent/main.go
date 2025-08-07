@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -32,7 +33,7 @@ const (
 	// Command execution timeout.
 	commandTimeout = 10 * time.Second
 	// Maximum output size to prevent memory exhaustion.
-	maxOutputSize = 10 * 1024 // 10KB limit
+	maxOutputSize = 92160 // 90KB limit (matching server)
 	// Maximum log output length for readability.
 	maxLogLength = 200
 	// Minimum parts required for IOPlatformUUID parsing.
@@ -40,7 +41,7 @@ const (
 	// Retry configuration.
 	maxRetries     = 3
 	initialBackoff = 1 * time.Second
-	maxBackoff     = 30 * time.Second
+	maxBackoff     = 2 * time.Minute // Wait up to 2 minutes with exponential backoff
 	// HTTP client timeout.
 	httpTimeout = 30 * time.Second
 	// Queue size for failed reports.
@@ -52,9 +53,10 @@ var checksConfig []byte
 
 var (
 	server     = flag.String("server", "", "Server URL (e.g., http://localhost:8080)")
+	join       = flag.String("join", "", "Join key for registration (required when using --server)")
 	runCheck   = flag.String("run", "", "Run a single check and exit (use 'all' to run all checks)")
 	listChecks = flag.Bool("list", false, "List available compliance checks")
-	interval   = flag.Duration("interval", 5*time.Minute, "Polling interval")
+	interval   = flag.Duration("interval", 20*time.Minute, "Polling interval")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	quiet      = false // Set to true to suppress INFO logs (used for interactive mode)
 )
@@ -76,6 +78,7 @@ type Agent struct {
 	httpClient    *http.Client
 	failedReports chan gitmdm.DeviceReport
 	serverURL     string
+	joinKey       string
 	hardwareID    string
 	hostname      string
 	user          string
@@ -140,10 +143,15 @@ func main() {
 	}
 
 	if *server == "" {
-		log.Fatal("Server URL is required (use -server flag)")
+		log.Fatal("Server URL is required (use --server flag)")
+	}
+
+	if *join == "" {
+		log.Fatal("Join key is required when using --server (use --join flag)")
 	}
 
 	agent.serverURL = strings.TrimSuffix(*server, "/")
+	agent.joinKey = *join
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -202,7 +210,7 @@ func (a *Agent) reportToServer(ctx context.Context) {
 
 	err := retry.Do(func() error {
 		return a.sendReport(ctx, report)
-	}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 	if err != nil {
 		log.Printf("[ERROR] Failed to send report after %d retries: %v", maxRetries, err)
 		// Queue for later retry if queue not full
@@ -232,6 +240,7 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Join-Key", a.joinKey)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -244,7 +253,12 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned status %d", resp.StatusCode)
+		// Read response body for debugging (limit to 256 bytes)
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+		if err != nil {
+			return fmt.Errorf("server returned status %d (failed to read body: %v)", resp.StatusCode, err)
+		}
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return nil
@@ -267,7 +281,7 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 					log.Printf("[INFO] Retrying failed report for device %s", report.HardwareID)
 					err := retry.Do(func() error {
 						return a.sendReport(ctx, report)
-					}, retry.Attempts(maxRetries), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
+					}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 
 					if err != nil {
 						log.Printf("[ERROR] Failed to retry report: %v", err)
@@ -826,12 +840,12 @@ func hardwareID() string {
 func (a *Agent) listAvailableChecks() {
 	osName := runtime.GOOS
 
-	fmt.Println("\n╭─────────────────────────────────────────────────╮")
-	fmt.Println("│           Available Compliance Checks           │")
-	fmt.Println("├─────────────────────────────────────────────────┤")
-	fmt.Printf("│  Platform: %-36s │\n", osName)
-	fmt.Println("╰─────────────────────────────────────────────────╯")
-	fmt.Println()
+	log.Println("\n╭─────────────────────────────────────────────────╮")
+	log.Println("│           Available Compliance Checks           │")
+	log.Println("├─────────────────────────────────────────────────┤")
+	log.Printf("│  Platform: %-36s │\n", osName)
+	log.Println("╰─────────────────────────────────────────────────╯")
+	log.Println()
 
 	// Categories for organization
 	categories := map[string][]string{
@@ -845,8 +859,8 @@ func (a *Agent) listAvailableChecks() {
 
 	for _, category := range categoryOrder {
 		checks := categories[category]
-		fmt.Printf("%s\n", category)
-		fmt.Println(strings.Repeat("─", 50))
+		log.Printf("%s\n", category)
+		log.Println(strings.Repeat("─", 50))
 
 		for _, checkName := range checks {
 			if checkDef, exists := a.config.Checks[checkName]; exists {
@@ -875,17 +889,17 @@ func (a *Agent) listAvailableChecks() {
 				if available {
 					// Get description based on check type
 					description := getCheckDescription(checkName)
-					fmt.Printf("  %-20s %s\n", checkName, description)
+					log.Printf("  %-20s %s\n", checkName, description)
 				}
 			}
 		}
-		fmt.Println()
+		log.Println()
 	}
 
-	fmt.Println("Usage:")
-	fmt.Println("  Run a single check:  agent -run <check_name>")
-	fmt.Println("  Run all checks:      agent -run all")
-	fmt.Println()
+	log.Println("Usage:")
+	log.Println("  Run a single check:  agent -run <check_name>")
+	log.Println("  Run all checks:      agent -run all")
+	log.Println()
 }
 
 // getCheckDescription returns a human-friendly description for each check
@@ -935,11 +949,16 @@ func (a *Agent) runAllChecksInteractive() {
 	defer func() { quiet = oldQuiet }()
 
 	osName := runtime.GOOS
-	fmt.Println("🔍 Running security checks...")
-	fmt.Println()
+	log.Println("🔍 Running security checks...")
+	log.Println()
 
 	// Get checks to run in proper order
-	availableChecks := a.collectAvailableChecks(osName)
+	var availableChecks []string
+	for checkName, checkDef := range a.config.Checks {
+		if a.isCheckAvailable(checkDef, osName) {
+			availableChecks = append(availableChecks, checkName)
+		}
+	}
 	finalOrder := a.orderChecks(availableChecks)
 
 	// Execute all checks
@@ -949,19 +968,8 @@ func (a *Agent) runAllChecksInteractive() {
 	a.displayCheckResults(results, finalOrder, summary)
 }
 
-// collectAvailableChecks finds all checks available for the given OS.
-func (a *Agent) collectAvailableChecks(osName string) []string {
-	var availableChecks []string
-	for checkName, checkDef := range a.config.Checks {
-		if a.isCheckAvailable(checkDef, osName) {
-			availableChecks = append(availableChecks, checkName)
-		}
-	}
-	return availableChecks
-}
-
 // isCheckAvailable determines if a check is available for the given OS.
-func (a *Agent) isCheckAvailable(checkDef CheckDefinition, osName string) bool {
+func (*Agent) isCheckAvailable(checkDef CheckDefinition, osName string) bool {
 	if _, exists := checkDef.Commands[osName]; exists {
 		return true
 	}
@@ -982,7 +990,7 @@ func (a *Agent) isCheckAvailable(checkDef CheckDefinition, osName string) bool {
 }
 
 // orderChecks sorts checks into preferred execution order.
-func (a *Agent) orderChecks(availableChecks []string) []string {
+func (*Agent) orderChecks(availableChecks []string) []string {
 	checkOrder := []string{
 		"disk_encryption", "firewall", "app_firewall", "screen_lock", "auto_login",
 		"password_policy", "antivirus", "software_updates",
@@ -1009,7 +1017,7 @@ func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string
 	for _, checkName := range checkNames {
 		result := a.executeSingleCheck(checkName, osName)
 		results[checkName] = result
-		
+
 		// Update summary
 		switch result.Status {
 		case "pass":
@@ -1055,7 +1063,7 @@ func (a *Agent) executeSingleCheck(checkName, osName string) CheckResult {
 }
 
 // getCommandsForOS gets the appropriate commands for the given OS.
-func (a *Agent) getCommandsForOS(checkDef CheckDefinition, osName string) []string {
+func (*Agent) getCommandsForOS(checkDef CheckDefinition, osName string) []string {
 	if cmds, exists := checkDef.Commands[osName]; exists {
 		return cmds
 	}
@@ -1077,18 +1085,18 @@ func (a *Agent) getCommandsForOS(checkDef CheckDefinition, osName string) []stri
 
 // displayCheckResults shows the check results in a formatted way.
 func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder []string, summary CheckResultSummary) {
-	fmt.Println()
+	log.Println()
 
 	if summary.FailCount > 0 {
 		pluralS := ""
 		if summary.FailCount != 1 {
 			pluralS = "s"
 		}
-		fmt.Printf("⚠️  %d issue%s require attention\n\n", summary.FailCount, pluralS)
+		log.Printf("⚠️  %d issue%s require attention\n\n", summary.FailCount, pluralS)
 		a.displayFailedChecks(results, finalOrder)
 	} else {
-		fmt.Println("✅ All systems secure")
-		fmt.Println()
+		log.Println("✅ All systems secure")
+		log.Println()
 	}
 
 	// Only show passed checks if there are no failures
@@ -1097,58 +1105,43 @@ func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder [
 		if summary.PassCount != 1 {
 			pluralS = "s"
 		}
-		fmt.Printf("✅ %d check%s passed\n", summary.PassCount, pluralS)
+		log.Printf("✅ %d check%s passed\n", summary.PassCount, pluralS)
 	}
 
-	fmt.Println()
+	log.Println()
 }
 
 // displayFailedChecks shows details for all failed checks.
 func (a *Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []string) {
-	failedChecks := a.getFailedChecks(results, finalOrder)
-
-	for i, checkName := range failedChecks {
-		result := results[checkName]
-		a.displaySingleFailedCheck(result, checkName)
-
-		// Add spacing between issues (but not after the last one)
-		if i < len(failedChecks)-1 {
-			fmt.Println()
-			fmt.Println("   ─────────────────────────")
-			fmt.Println()
-		}
-	}
-}
-
-// getFailedChecks returns list of failed check names in order.
-func (a *Agent) getFailedChecks(results map[string]CheckResult, finalOrder []string) []string {
+	// Get failed checks in order
 	var failedChecks []string
 	for _, checkName := range finalOrder {
 		if result, exists := results[checkName]; exists && result.Status == "fail" {
 			failedChecks = append(failedChecks, checkName)
 		}
 	}
-	return failedChecks
-}
 
-// displaySingleFailedCheck shows details for a single failed check.
-func (a *Agent) displaySingleFailedCheck(result CheckResult, checkName string) {
-	displayName := strings.ReplaceAll(checkName, "_", " ")
+	for i, checkName := range failedChecks {
+		result := results[checkName]
+		// Display single failed check inline
+		displayName := strings.ReplaceAll(checkName, "_", " ")
+		log.Printf("🔸 %s\n", displayName)
+		log.Printf("   🐞 Problem: %s\n", result.Reason)
+		if len(result.Commands) > 0 {
+			log.Printf("   💻 Evidence: %s\n", strings.Join(result.Commands, " && "))
+		}
+		if len(result.Remediation) > 0 {
+			log.Printf("\n   🔧 How to fix:\n")
+			for j, step := range result.Remediation {
+				log.Printf("      %d. %s\n", j+1, step)
+			}
+		}
 
-	fmt.Printf("🔸 %s\n", displayName)
-	fmt.Printf("   🐞 Problem: %s\n", result.Reason)
-
-	// Show command evidence
-	if len(result.Commands) > 0 {
-		fmt.Printf("   💻 Evidence: %s\n", strings.Join(result.Commands, " && "))
-	}
-
-	// Show remediation steps
-	if len(result.Remediation) > 0 {
-		fmt.Printf("\n   🔧 How to fix:\n")
-		for j, step := range result.Remediation {
-			fmt.Printf("      %d. %s\n", j+1, step)
+		// Add spacing between issues (but not after the last one)
+		if i < len(failedChecks)-1 {
+			log.Println()
+			log.Println("   ─────────────────────────")
+			log.Println()
 		}
 	}
 }
-

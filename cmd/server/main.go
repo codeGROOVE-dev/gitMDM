@@ -801,6 +801,9 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		LastIP:     clientIP,
 		Checks:     report.Checks,
 		// In-memory only fields
+		OS:            report.OS,
+		Architecture:  report.Architecture,
+		Version:       report.Version,
 		SystemUptime:  report.SystemUptime,
 		CPULoad:       report.CPULoad,
 		LoggedInUsers: report.LoggedInUsers,

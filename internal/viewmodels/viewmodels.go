@@ -3,7 +3,9 @@ package viewmodels
 
 import (
 	"gitmdm/internal/gitmdm"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,6 +58,7 @@ type DeviceDetail struct {
 	PassCount         int
 	FailCount         int
 	NACount           int
+	FormattedUptime   string // Human-readable uptime
 }
 
 // CheckResult represents the display info for a check.
@@ -66,12 +69,64 @@ type CheckResult struct {
 	Remediation []string
 }
 
+// formatUptime parses various uptime formats and returns a human-readable string.
+func formatUptime(uptime string) string {
+	if uptime == "" || uptime == "unavailable" || uptime == "unsupported" {
+		return uptime
+	}
+
+	// Try to parse macOS/Linux uptime format (e.g., "17:05  up 35 mins, 3 users, load averages: 2.68 2.93 2.87")
+	uptimeRegex := regexp.MustCompile(`up\s+(?:(\d+)\s+days?,\s*)?(?:(\d+):(\d+),|(\d+)\s+mins?)`)
+	matches := uptimeRegex.FindStringSubmatch(uptime)
+	
+	if len(matches) > 0 {
+		days := 0
+		hours := 0
+		mins := 0
+		
+		if matches[1] != "" {
+			days, _ = strconv.Atoi(matches[1])
+		}
+		if matches[2] != "" {
+			hours, _ = strconv.Atoi(matches[2])
+		}
+		if matches[3] != "" {
+			mins, _ = strconv.Atoi(matches[3])
+		}
+		if matches[4] != "" {
+			mins, _ = strconv.Atoi(matches[4])
+		}
+		
+		// Format the output
+		if days > 0 {
+			if days == 1 {
+				return "1 day"
+			}
+			return strconv.Itoa(days) + " days"
+		} else if hours > 0 {
+			if hours == 1 {
+				return "1 hour"
+			}
+			return strconv.Itoa(hours) + " hours"
+		} else if mins > 0 {
+			if mins == 1 {
+				return "1 minute"
+			}
+			return strconv.Itoa(mins) + " minutes"
+		}
+	}
+
+	// Try to parse Windows format or if the regex didn't match, return the original
+	return uptime
+}
+
 // BuildDeviceDetail creates a detailed view model for a single device.
 // staleThreshold determines which checks to include - zero time means include all.
 func BuildDeviceDetail(device *gitmdm.Device, staleThreshold time.Time) *DeviceDetail {
 	detail := &DeviceDetail{
-		Device:       device,
-		CheckResults: make(map[string]CheckResult),
+		Device:          device,
+		CheckResults:    make(map[string]CheckResult),
+		FormattedUptime: formatUptime(device.SystemUptime),
 	}
 
 	// Process all checks

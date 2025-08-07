@@ -148,6 +148,9 @@ func main() {
 			User:          agent.user,
 			Timestamp:     time.Now(),
 			Checks:        agent.runAllChecks(ctx),
+			OS:            agent.osInfo(ctx),
+			Architecture:  agent.architecture(ctx),
+			Version:       agent.osVersion(ctx),
 			SystemUptime:  agent.systemUptime(ctx),
 			CPULoad:       agent.cpuLoad(ctx),
 			LoggedInUsers: agent.loggedInUsers(ctx),
@@ -268,6 +271,9 @@ func (a *Agent) reportToServer(ctx context.Context) {
 		User:          a.user,
 		Timestamp:     time.Now(),
 		Checks:        a.runAllChecks(ctx),
+		OS:            a.osInfo(ctx),
+		Architecture:  a.architecture(ctx),
+		Version:       a.osVersion(ctx),
 		SystemUptime:  uptime,
 		CPULoad:       cpuLoad,
 		LoggedInUsers: loggedInUsers,
@@ -576,6 +582,13 @@ func (*Agent) cpuLoad(ctx context.Context) string {
 
 	if output, err := cmd.Output(); err == nil {
 		result := strings.TrimSpace(string(output))
+		// For Linux /proc/loadavg, extract just the three load averages
+		if runtime.GOOS == "linux" {
+			fields := strings.Fields(result)
+			if len(fields) >= 3 {
+				result = strings.Join(fields[:3], " ")
+			}
+		}
 		// For uptime output on Solaris, extract just the load average part
 		if (runtime.GOOS == "solaris" || runtime.GOOS == "illumos") && strings.Contains(result, "load average:") {
 			parts := strings.Split(result, "load average:")
@@ -626,6 +639,77 @@ func (*Agent) loggedInUsers(ctx context.Context) string {
 		return result
 	}
 	return "unavailable"
+}
+
+func (*Agent) osInfo(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		// Try to get pretty name from os-release
+		if data, err := os.ReadFile("/etc/os-release"); err == nil {
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "PRETTY_NAME=") {
+					name := strings.TrimPrefix(line, "PRETTY_NAME=")
+					return strings.Trim(name, `"`)
+				}
+			}
+		}
+		// Fallback to uname
+		cmd = exec.CommandContext(ctx, "uname", "-s")
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "sw_vers", "-productName")
+	case "windows":
+		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "Caption", "/value")
+	default:
+		cmd = exec.CommandContext(ctx, "uname", "-s")
+	}
+	if cmd != nil {
+		if output, err := cmd.Output(); err == nil {
+			result := strings.TrimSpace(string(output))
+			if runtime.GOOS == "windows" && strings.Contains(result, "Caption=") {
+				result = strings.TrimPrefix(result, "Caption=")
+			}
+			if result != "" {
+				return result
+			}
+		}
+	}
+	// Fallback to Go's runtime info
+	return runtime.GOOS
+}
+
+func (*Agent) architecture(ctx context.Context) string {
+	// runtime.GOARCH is the most reliable way to get architecture
+	return runtime.GOARCH
+}
+
+func (*Agent) osVersion(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.CommandContext(ctx, "uname", "-r")
+	case "darwin":
+		cmd = exec.CommandContext(ctx, "sw_vers", "-productVersion")
+	case "windows":
+		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "Version", "/value")
+	default:
+		cmd = exec.CommandContext(ctx, "uname", "-r")
+	}
+	if output, err := cmd.Output(); err == nil {
+		result := strings.TrimSpace(string(output))
+		if runtime.GOOS == "windows" && strings.Contains(result, "Version=") {
+			result = strings.TrimPrefix(result, "Version=")
+		}
+		if result != "" {
+			return result
+		}
+	}
+	return "unknown"
 }
 
 func darwinHardwareID() string {

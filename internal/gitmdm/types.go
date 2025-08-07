@@ -12,6 +12,9 @@ type Device struct {
 	Hostname   string           `json:"hostname"`
 	User       string           `json:"user"`
 	// In-memory only fields (not persisted to git)
+	OS            string `json:"-"`
+	Architecture  string `json:"-"`
+	Version       string `json:"-"`
 	SystemUptime  string `json:"-"`
 	CPULoad       string `json:"-"`
 	LoggedInUsers string `json:"-"`
@@ -47,6 +50,9 @@ type DeviceReport struct {
 	HardwareID    string           `json:"hardware_id"`
 	Hostname      string           `json:"hostname"`
 	User          string           `json:"user"`
+	OS            string           `json:"os,omitempty"`
+	Architecture  string           `json:"architecture,omitempty"`
+	Version       string           `json:"version,omitempty"`
 	SystemUptime  string           `json:"system_uptime,omitempty"`
 	CPULoad       string           `json:"cpu_load,omitempty"`
 	LoggedInUsers string           `json:"logged_in_users,omitempty"`

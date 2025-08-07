@@ -1,10 +1,10 @@
 # gitMDM 🧪
 
-The MDM for startups that actually care about security.
+The MDM for folks that care about security.
 
 ## Your Problem
 
-Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9. 
+Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9.
 
 Traditional MDMs run as root, execute arbitrary code from their cloud servers, and auto-install binaries downloaded from the internet. Your security engineer just had an aneurysm.
 
@@ -28,24 +28,26 @@ Your Team: "...continue"
 - **You Own Everything**: Your server, your git repo, your data. No third-party cloud with root access to your fleet.
 - **Audit Everything**: Every change is a git commit. `git blame` for compliance.
 
+## Demo
+
+Visit our demo instance at https://gitmdm.codegroove.dev/
+
 ## Quick Start for the Impatient
 
 ```bash
-# On your secure server (or laptop, we don't judge)
+# On your secure server (Cloud Run, or laptop, we don't judge)
 ./gitmdm-server -git /opt/compliance
 
 # On your OpenBSD machine
 $ doas pkg_add gitmdm-agent  # just kidding, compile it yourself
 $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 
-# On your Linux laptop  
+# On your Linux laptop
 $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 
 # On that Mac the designer insisted on
 $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 ```
-
-Join keys stored in `~/.config/gitmdm/` (or wherever your OS says), not in process lists.
 
 ## What SOC 2 Actually Requires vs What We Check
 
@@ -61,7 +63,7 @@ Join keys stored in `~/.config/gitmdm/` (or wherever your OS says), not in proce
 ```yaml
 # Your snowflake setups, our problem:
 - MATE on OpenBSD (we see you)
-- Sway on Alpine (of course)  
+- Sway on Alpine (of course)
 - i3 on Debian (classic)
 - Whatever that custom Wayland compositor you wrote is
 - Even macOS (unfortunate, but supported)
@@ -85,16 +87,6 @@ The server literally cannot execute commands. We removed the code. It's not ther
 
 ## For Your Compliance Team
 
-"How do we prove compliance?"
-
-```bash
-$ cd compliance-repo
-$ git log --oneline
-8f3d2a1 workstation-42: disk encryption enabled
-7b2c3f9 laptop-dev-3: screen lock fixed
-5a1e8c4 desktop-1: firewall enabled
-```
-
 "What if someone tampers with the agent?"
 
 They can. It's their machine. They can also lie on spreadsheets. At least this has timestamps.
@@ -106,10 +98,8 @@ No. But neither was Stripe when you started using it.
 ## Building
 
 ```bash
-make all  # Static binaries, because dynamic linking is attack surface
+make all
 ```
-
-No npm. No pip. No containers. Just Go.
 
 ## Installation That Respects Your OS
 
@@ -118,40 +108,6 @@ No npm. No pip. No containers. Just Go.
 - **macOS**: launchd (the least worst option)
 - **FreeBSD/NetBSD**: cron (see OpenBSD)
 
-Pre-flight check ensures the server exists before installing. Novel concept.
-
-## FAQ for Security-Conscious Teams
-
-**Q: Can this execute remote commands?**  
-A: No. Check the code. The handler doesn't exist.
-
-**Q: What about supply chain attacks?**  
-A: It's 2 dependencies: yaml and retry. Vendor them if paranoid.
-
-**Q: Does it require root?**  
-A: Never. User-level only. Just reads system configuration.
-
-**Q: What data does it collect?**  
-A: Read `checks.yaml`. It's compiled in. No surprises.
-
-**Q: Can we self-host?**  
-A: That's the only option. There's no cloud service. You run it.
-
-**Q: What if an agent is compromised?**  
-A: It can lie about that device's compliance. That's it. No lateral movement.
-
-**Q: OpenBSD pledge/unveil support?**  
-A: On the roadmap. PRs welcome from fellow paranoids.
-
 ---
 
-*Built by engineers who rm -rf node_modules on principle.*
-
-**⚠️ EXPERIMENTAL**  
-*But still more trustworthy than your current MDM.*
-
-*Remember: Compliance theater is still theater, but at least our stage doesn't have backdoors.*
-
----
-
-*"Because compliance doesn't require compromise."*
+*Because your security posture shouldn't require the missionary position.*

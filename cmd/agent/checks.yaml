@@ -235,13 +235,13 @@ checks:
         excludes: "xautolock|xss-lock|light-locker"
         remediation:
           - Configure screen locking for Openbox
-          - "Add to ~/.config/openbox/autostart: 'xautolock -time 15 -locker \"i3lock -c 000000\" &'"
+          - 'Add to ~/.config/openbox/autostart: ''xautolock -time 15 -locker "i3lock -c 000000" &'''
       # Sway (Wayland) - Only check if sway is running
       - output: pgrep sway >/dev/null && grep "exec swayidle" ~/.config/sway/config 2>/dev/null
         excludes: "swayidle"
         remediation:
           - Configure swayidle to lock screen automatically
-          - "Add to Sway config: 'exec swayidle -w timeout 900 \"swaylock -f\" before-sleep \"swaylock -f\"'"
+          - 'Add to Sway config: ''exec swayidle -w timeout 900 "swaylock -f" before-sleep "swaylock -f"'''
       # Generic X11 fallback - Only if X11 is running but no specific DE detected
       - output: >
           pgrep Xorg >/dev/null && ! (pgrep gnome-shell >/dev/null || pgrep mate-session >/dev/null || pgrep xfce4-session >/dev/null ||
@@ -251,7 +251,7 @@ checks:
         remediation:
           - Configure X11 screen saver with 'xset s 900'
           - Install and configure a screen locker (xlock, i3lock, slock)
-          - "Add to window manager startup: 'xautolock -time 15 -locker \"xlock\" &'"
+          - 'Add to window manager startup: ''xautolock -time 15 -locker "xlock" &'''
     linux:
       # Linux-specific additional checks
     windows:
@@ -277,43 +277,43 @@ checks:
           - Set "Turn display off on power adapter when inactive" to 15 minutes or less
     unix:
       # GNOME - Only check timeout if GNOME Shell is running
-      - output: pgrep gnome-shell && gsettings get org.gnome.desktop.session idle-delay
+      - output: pgrep gnome-shell >/dev/null && gsettings get org.gnome.desktop.session idle-delay
         includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
         remediation:
           - Set GNOME screensaver timeout to 15 minutes or less
           - Run 'gsettings set org.gnome.desktop.session idle-delay 900'
       # MATE - Only check timeout if MATE session is running
-      - output: pgrep mate-session && gsettings get org.mate.screensaver lock-delay
+      - output: pgrep mate-session >/dev/null && gsettings get org.mate.session idle-delay
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
         remediation:
           - Set MATE screensaver timeout to 15 minutes or less
-          - Run 'gsettings set org.mate.screensaver lock-delay 15'
+          - Run 'gsettings set org.mate.session idle-delay 15'
       # XFCE - Only check timeout if XFCE session is running
-      - output: pgrep xfce4-session && xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-ac-sleep
+      - output: pgrep xfce4-session >/dev/null && xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-ac-sleep
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
         remediation:
           - Set XFCE display timeout to 15 minutes or less
           - Run 'xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-ac-sleep -s 15'
-      - output: pgrep xfce4-session && xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-battery-sleep
+      - output: pgrep xfce4-session >/dev/null && xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-battery-sleep
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
         remediation:
           - Set XFCE battery display timeout to 15 minutes or less
           - Run 'xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-battery-sleep -s 15'
       # KDE Plasma - Only check timeout if KDE session is running
-      - output: pgrep plasmashell && kreadconfig5 --file kscreenlockerrc --group Daemon --key Timeout
+      - output: pgrep plasmashell >/dev/null && kreadconfig5 --file kscreenlockerrc --group Daemon --key Timeout
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
         remediation:
           - Set KDE screen lock timeout to 15 minutes or less
           - Run 'kwriteconfig5 --file kscreenlockerrc --group Daemon --key Timeout 15'
           - Or configure in System Settings > Desktop Behavior > Screen Locking
       # Cinnamon - Only check timeout if Cinnamon is running
-      - output: pgrep cinnamon && gsettings get org.cinnamon.desktop.screensaver lock-delay
+      - output: pgrep cinnamon >/dev/null && gsettings get org.cinnamon.desktop.screensaver lock-delay
         includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
         remediation:
           - Set Cinnamon screensaver timeout to 15 minutes or less
           - Run 'gsettings set org.cinnamon.desktop.screensaver lock-delay 900'
       # Budgie - Only check timeout if Budgie is running
-      - output: pgrep budgie-panel && gsettings get org.gnome.desktop.session idle-delay
+      - output: pgrep budgie-panel >/dev/null && gsettings get org.gnome.desktop.session idle-delay
         includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
         remediation:
           - Set Budgie screensaver timeout to 15 minutes or less
@@ -329,30 +329,30 @@ checks:
         includes: "-time (1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})"
         remediation:
           - Configure xautolock with 15 minute timeout or less
-          - "Add to autostart: 'xautolock -time 15 -locker \"light-locker\" &'"
+          - 'Add to autostart: ''xautolock -time 15 -locker "light-locker" &'''
       # Sway - Only check timeout if sway is running
       - output: pgrep sway >/dev/null && grep "timeout" ~/.config/sway/config 2>/dev/null
         includes: "timeout [9][1-9][0-9][0-9]|timeout [1-9][0-9]{4,}"
         remediation:
           - Configure swayidle timeout to 15 minutes (900 seconds) or less
-          - "Add to Sway config: 'exec swayidle -w timeout 900 \"swaylock -f\"'"
+          - 'Add to Sway config: ''exec swayidle -w timeout 900 "swaylock -f"'''
       # i3 Window Manager - Check if xautolock is running with proper timeout
       - output: pgrep i3 >/dev/null && pgrep -fl "xautolock.*-time"
         includes: "-time (1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})"
         remediation:
           - Configure xautolock timeout to 15 minutes or less
-          - "Add to i3 config: 'exec --no-startup-id xautolock -time 15 -locker \"i3lock -c 000000\"'"
+          - 'Add to i3 config: ''exec --no-startup-id xautolock -time 15 -locker "i3lock -c 000000"'''
       # Openbox - Check if xautolock is running with proper timeout
       - output: pgrep openbox >/dev/null && pgrep -fl "xautolock.*-time"
         includes: "-time (1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})"
         remediation:
           - Configure xautolock timeout to 15 minutes or less
-          - "Add to ~/.config/openbox/autostart: 'xautolock -time 15 -locker \"i3lock -c 000000\" &'"
+          - 'Add to ~/.config/openbox/autostart: ''xautolock -time 15 -locker "i3lock -c 000000" &'''
       # Generic X11 - Only if X11 is running but no specific DE detected
       - output: >
-          pgrep Xorg && ! (pgrep gnome-shell || pgrep mate-session || pgrep xfce4-session ||
-          pgrep plasmashell || pgrep cinnamon || pgrep budgie-panel || pgrep lxqt-session ||
-          pgrep lxsession || pgrep i3 || pgrep openbox || pgrep sway) && xset q
+          pgrep Xorg >/dev/null && ! (pgrep gnome-shell >/dev/null || pgrep mate-session >/dev/null || pgrep xfce4-session >/dev/null ||
+          pgrep plasmashell >/dev/null || pgrep cinnamon >/dev/null || pgrep budgie-panel >/dev/null || pgrep lxqt-session >/dev/null ||
+          pgrep lxsession >/dev/null || pgrep i3 >/dev/null || pgrep openbox >/dev/null || pgrep sway >/dev/null) && xset q
         includes: "timeout:.*([9][1-9][0-9]|[1-9][0-9]{3,})"
         remediation:
           - Set X11 screen saver timeout to 15 minutes (900 seconds) or less

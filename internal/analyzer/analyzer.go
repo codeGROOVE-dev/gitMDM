@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"gitmdm/internal/config"
 	"gitmdm/internal/gitmdm"
+	"log"
+	"os"
 	"regexp"
 	"strings"
 )
+
+var debug = os.Getenv("DEBUG") == "true"
 
 // AnalyzeCheck analyzes a CommandOutput against a CommandRule to determine pass/fail.
 func AnalyzeCheck(output *gitmdm.CommandOutput, rule config.CommandRule) error {
@@ -20,6 +24,9 @@ func AnalyzeCheck(output *gitmdm.CommandOutput, rule config.CommandRule) error {
 	// skip includes/excludes analysis (the command couldn't run properly)
 	if output.ExitCode != 0 && rule.ExitCode == nil {
 		// Mark as skipped since the command couldn't run (e.g., pgrep failed)
+		if debug {
+			log.Printf("[DEBUG] Skipping analysis for command with exit code %d (no exitcode rule configured)", output.ExitCode)
+		}
 		output.Skipped = true
 		return nil
 	}

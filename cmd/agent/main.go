@@ -997,6 +997,41 @@ func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder [
 	printLine("")
 }
 
+// displayFailedOutput displays a single failed output with appropriate formatting.
+func displayFailedOutput(idx int, output gitmdm.CommandOutput, totalOutputs int) {
+	// If multiple commands were checked, number them
+	if totalOutputs > 1 {
+		printLine("      [Command %d of %d - FAILED]", idx+1, totalOutputs)
+	}
+
+	// Show command or file that was checked
+	if output.Command != "" {
+		printLine("      Command: %s", output.Command)
+	} else if output.File != "" {
+		printLine("      File: %s", output.File)
+	}
+	// Show why it failed
+	if output.FailReason != "" {
+		printLine("      Failure: %s", output.FailReason)
+	}
+
+	// Show relevant output (truncated for readability)
+	if output.Stdout != "" {
+		lines := strings.Split(output.Stdout, "\n")
+		maxLines := maxDisplayLines
+		if len(lines) > maxLines {
+			printLine("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
+			printLine("      ... (output truncated, %d more lines)", len(lines)-maxLines)
+		} else {
+			printLine("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
+		}
+	}
+
+	if output.Stderr != "" && output.Stderr != output.FailReason {
+		printLine("      Error: %s", output.Stderr)
+	}
+}
+
 // displayFailedChecks shows details for all failed checks.
 func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []string) {
 	// Get failed checks in order
@@ -1018,48 +1053,17 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 		if len(result.Outputs) > 0 {
 			printLine("   💻 Evidence:")
 			failedCount := 0
-			for i, output := range result.Outputs {
+			for idx, output := range result.Outputs {
 				// Skip outputs that didn't fail
 				if !output.Failed {
 					continue
 				}
 				failedCount++
 
-				// If multiple commands were checked, number them
-				if len(result.Outputs) > 1 {
-					printLine("      [Command %d of %d - FAILED]", i+1, len(result.Outputs))
-				}
-
-				// Show command or file that was checked
-				if output.Command != "" {
-					printLine("      Command: %s", output.Command)
-				} else if output.File != "" {
-					printLine("      File: %s", output.File)
-				}
-				// Show why it failed
-				if output.FailReason != "" {
-					printLine("      Failure: %s", output.FailReason)
-				}
-
-				// Show relevant output (truncated for readability)
-				if output.Stdout != "" {
-					lines := strings.Split(output.Stdout, "\n")
-					maxLines := maxDisplayLines
-					if len(lines) > maxLines {
-						printLine("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
-						printLine("      ... (output truncated, %d more lines)", len(lines)-maxLines)
-					} else {
-						printLine("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
-					}
-				}
-
-				if output.Stderr != "" && output.Stderr != output.FailReason {
-					printLine("      Error: %s", output.Stderr)
-				}
-				
+				displayFailedOutput(idx, output, len(result.Outputs))
 				// Add spacing between multiple failed commands
 				if failedCount < len(result.Outputs) && len(result.Outputs) > 1 {
-					for j := i + 1; j < len(result.Outputs); j++ {
+					for j := idx + 1; j < len(result.Outputs); j++ {
 						if result.Outputs[j].Failed {
 							printLine("")
 							break

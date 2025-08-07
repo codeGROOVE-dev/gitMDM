@@ -40,6 +40,7 @@ linters:
     - gochecknoglobals # checks that no global variables exist
     - cyclop # replaced by revive
     - gocyclo # replaced by revive
+    - forbidigo # needs configuration to be useful
     - funlen # replaced by revive
     - godox # TODO's are OK
     - ireturn # It's OK
@@ -53,6 +54,7 @@ linters:
     - lll # [replaced by golines] reports long lines
     - mnd # detects magic numbers, duplicated by revive
     - nlreturn # [too strict and mostly code is not more readable] checks for a new line before return and branch statements to increase code clarity
+    - noinlineerr # disallows inline error handling `if err := ...; err != nil {`
     - prealloc # [premature optimization, but can be used in some cases] finds slice declarations that could potentially be preallocated
     - tagliatelle # needs configuration
     - testableexamples # checks if examples are testable (have an expected output)
@@ -60,6 +62,7 @@ linters:
     - paralleltest # not every test should be in parallel
     - wrapcheck # not required
     - wsl # [too strict and mostly code is not more readable] whitespace linter forces you to use empty lines
+    - wsl_v5 # [too strict and mostly code is not more readable] add or remove empty lines
     - zerologlint # detects the wrong usage of zerolog that a user forgets to dispatch zerolog.Event
 
   # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
@@ -173,7 +176,7 @@ linters:
           arguments:
             - max-lit-count: "5"
               allow-strs: '"","\n"'
-              allow-ints: "0,1,2,3,24,30,365,1024,0o600,0o700,0o750,0o755"
+              allow-ints: "0,1,2,3,24,30,60,100,365,0o600,0o700,0o750,0o755"
               allow-floats: "0.0,0.,1.0,1.,2.0,2."
         - name: cognitive-complexity
           arguments: [55]

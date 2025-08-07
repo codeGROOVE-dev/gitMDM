@@ -17,12 +17,18 @@ type Device struct {
 	LoggedInUsers string `json:"-"`
 }
 
-// CommandOutput represents the output from a single command execution.
+// CommandOutput represents the output from a single command or file check.
 type CommandOutput struct {
-	Command  string `json:"command"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exit_code"`
+	Command     string   `json:"command,omitempty"`      // Command that was executed
+	File        string   `json:"file,omitempty"`         // File that was read
+	Stdout      string   `json:"stdout,omitempty"`       // Command stdout or file contents
+	Stderr      string   `json:"stderr,omitempty"`       // Command stderr
+	ExitCode    int      `json:"exit_code,omitempty"`    // Command exit code
+	FileMissing bool     `json:"file_missing,omitempty"` // True if file doesn't exist
+	Skipped     bool     `json:"skipped,omitempty"`      // True if command was skipped (not found)
+	Failed      bool     `json:"failed,omitempty"`       // True if this specific check failed
+	FailReason  string   `json:"fail_reason,omitempty"`  // Why this specific check failed
+	Remediation []string `json:"remediation,omitempty"`  // Remediation steps for this failure
 }
 
 // Check represents a compliance check result, potentially with multiple command outputs.

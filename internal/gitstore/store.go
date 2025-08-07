@@ -73,9 +73,8 @@ func NewLocal(ctx context.Context, localPath string) (*Store, error) {
 			if err := createInitialCommit(repo, absPath); err != nil {
 				log.Printf("[WARN] Failed to create initial commit: %v", err)
 			}
-		} else {
-			return nil, fmt.Errorf("failed to check git repository: %w", err)
 		}
+		return nil, fmt.Errorf("failed to check git repository: %w", err)
 	} else {
 		// Open existing repository
 		repo, err = git.PlainOpen(absPath)
@@ -272,15 +271,20 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 	// Git operations using go-git
 	w, err := s.repo.Worktree()
 	if err != nil {
-		log.Printf("[WARN] Failed to get worktree: %v", err)
+		log.Printf("[WARN] Failed to get worktree for device %s: %v", device.HardwareID, err)
 		return nil
 	}
 
 	// Add all changes
+	retryCount := 0
 	if err := retry.Do(func() error {
+		retryCount++
+		if retryCount > 1 {
+			log.Printf("[DEBUG] Retry attempt %d/%d for git add (device %s)", retryCount, maxRetries, device.HardwareID)
+		}
 		return w.AddGlob("devices/*")
 	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
-		log.Printf("[WARN] Git add failed for device %s: %v", device.HardwareID, err)
+		log.Printf("[WARN] Git add failed for device %s after %d retries: %v", device.HardwareID, maxRetries, err)
 		return nil
 	}
 
@@ -467,8 +471,25 @@ func (s *Store) LoadDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 
 // sanitizeID converts a device ID to a safe directory name.
 func sanitizeID(id string) string {
+	// First, handle special cases that need hashing
+	if id == "" || id == ".." || id == "./" || id == "." {
+		hash := sha256.Sum256([]byte(id))
+		return "id-" + hex.EncodeToString(hash[:8])
+	}
+
+	// Remove any leading path traversal attempts
+	cleaned := id
+	// Remove leading ../ sequences
+	for strings.HasPrefix(cleaned, "../") {
+		cleaned = cleaned[3:]
+	}
+	// Remove leading ./ sequences
+	for strings.HasPrefix(cleaned, "./") {
+		cleaned = cleaned[2:]
+	}
+
 	var sanitized strings.Builder
-	for _, r := range id {
+	for _, r := range cleaned {
 		switch {
 		case r >= 'a' && r <= 'z':
 			sanitized.WriteRune(r)
@@ -492,7 +513,7 @@ func sanitizeID(id string) string {
 	result = strings.ReplaceAll(result, "..", "-")
 	result = strings.ReplaceAll(result, "//", "-")
 
-	// Ensure ID is not empty
+	// Ensure ID is not empty after sanitization
 	if result == "" || result == "-" || result == "_" {
 		hash := sha256.Sum256([]byte(id))
 		result = "id-" + hex.EncodeToString(hash[:8])

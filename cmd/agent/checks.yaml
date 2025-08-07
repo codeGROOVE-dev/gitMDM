@@ -1,307 +1,440 @@
-# gitMDM Compliance Checks Configuration
-# Commands use simple names without paths - we set a secure PATH in the agent
-# This prevents PATH-based attacks while working with bash restricted mode
-# Each check can have OS-specific commands and remediation steps
-
 checks:
   hostname:
-    commands:
-      all:
-        - hostname
+    description: "Display system hostname"
+    all:
+      - output: hostname
 
   uname:
-    commands:
-      linux,darwin,freebsd,openbsd,netbsd,dragonfly,solaris,illumos:
-        - uname -a
-      windows:
-        - cmd.exe /c ver
-
-  users:
-    commands:
-      linux,freebsd,openbsd,netbsd,dragonfly,solaris,illumos:
-        - cat /etc/passwd
-      darwin:
-        - dscl . -list /Users | grep -Ev "^(_.*|daemon|nobody|root)\$"
-      windows:
-        - net.exe user
-
-  network:
-    commands:
-      linux:
-        - ip addr show
-      darwin,freebsd,openbsd,netbsd,dragonfly:
-        - ifconfig -a
-      solaris,illumos:
-        - ifconfig -a
-      windows:
-        - ipconfig.exe /all
+    description: "Show system version and kernel information"
+    unix:
+      - output: uname -a
+    windows:
+      - output: ver
 
   disk_encryption:
-    commands:
-      linux:
-        - lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,STATE
-      darwin:
-        - diskutil info /
-      freebsd,dragonfly:
-        - geli status
-      openbsd:
-        - bioctl softraid0
-      netbsd:
-        - cgdconfig -l
-      solaris,illumos:
-        - zpool status
-      windows:
-        - "manage-bde.exe -status C:"
-    remediation:
-      darwin:
-        - "Open System Settings > Privacy & Security"
-        - "Scroll down to FileVault"
-        - "Click 'Turn On...' to enable FileVault"
-        - "Follow the prompts to set up disk encryption"
-        - "Save your recovery key in a secure location"
-        - "Restart your Mac to complete the encryption process"
-      linux:
-        - "For Ubuntu/Debian with LUKS:"
-        - "Back up your data before proceeding"
-        - "Install encryption tools: sudo apt install cryptsetup"
-        - "Use LUKS to encrypt partitions (requires reformatting)"
-        - "Or enable home directory encryption: sudo apt install ecryptfs-utils"
-        - "Run: ecryptfs-migrate-home -u <username>"
-      windows:
-        - "Open Settings > Update & Security > Device encryption"
-        - "If available, turn on Device encryption"
-        - "For BitLocker (Pro/Enterprise):"
-        - "Open Control Panel > BitLocker Drive Encryption"
-        - "Click 'Turn on BitLocker' for your system drive"
-        - "Follow the setup wizard and save your recovery key"
-
-  firewall:
-    commands:
-      linux:
-        # Try both iptables and ufw
-        - iptables -L -n -v
-        - ufw status verbose
-      darwin:
-        # Check packet filter (network firewall)
-        - pfctl -sr
-        - pfctl -s info
-      freebsd,openbsd,netbsd,dragonfly:
-        - pfctl -sr
-        - pfctl -s info
-      solaris,illumos:
-        - ipfstat -io
-      windows:
-        - netsh.exe advfirewall show allprofiles
-    remediation:
-      darwin:
-        - "Enable the packet filter firewall:"
-        - "Create firewall rules in /etc/pf.conf"
-        - "Enable with: sudo pfctl -e"
-        - "Load rules with: sudo pfctl -f /etc/pf.conf"
-        - "To persist across reboots, create a LaunchDaemon"
-      linux:
-        - "For systems with UFW (Ubuntu/Debian):"
-        - "Install UFW: sudo apt install ufw"
-        - "Set default policies: sudo ufw default deny incoming"
-        - "Allow SSH: sudo ufw allow ssh"
-        - "Enable firewall: sudo ufw enable"
-        - "Check status: sudo ufw status verbose"
-      windows:
-        - "Open Windows Security settings"
-        - "Go to Firewall & network protection"
-        - "Ensure all profiles are turned on (Domain, Private, Public)"
-        - "Click 'Advanced settings' for detailed configuration"
-
-  app_firewall:
-    commands:
-      darwin:
-        # Check Application Firewall (socketfilterfw)
-        - socketfilterfw --getglobalstate
-    remediation:
-      darwin:
-        - "Open System Settings > Network > Firewall"
-        - "Click on 'Options...'"
-        - "Turn on 'Enable Firewall'"
-        - "Check 'Block all incoming connections' for maximum security"
-        - "Or use command line:"
-        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on"
-        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall off"
-        - "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setallowsigned on"
-
-  screen_lock:
-    commands:
-      linux:
-        # Check multiple desktop environments
-        - gsettings get org.gnome.desktop.screensaver lock-enabled
-        - xset q
-        - dconf read /org/gnome/desktop/screensaver/lock-enabled
-        - kreadconfig5 --file kscreenlockerrc --group Daemon --key Autolock
-      darwin:
-        - defaults -currentHost read com.apple.screensaver idleTime
-        - sysadminctl -screenLock status
-    remediation:
-      darwin:
-        - "Open System Settings > Lock Screen"
-        - "Set 'Start Screen Saver when inactive' to 15 minutes or less"
-        - "Set 'Require password after screen saver begins' to 'immediately'"
-        - "Turn off 'Use Apple Watch to unlock'"
-        - "Or use command line:"
-        - "defaults -currentHost write com.apple.screensaver idleTime -int 900"
-        - "defaults write com.apple.screensaver askForPassword -int 1"
-        - "defaults write com.apple.screensaver askForPasswordDelay -int 0"
-      linux:
-        - "For GNOME:"
-        - "Open Settings > Privacy > Screen Lock"
-        - "Enable 'Automatic Screen Lock'"
-        - "Set 'Automatic Screen Lock Delay' to 15 minutes or less"
-        - "Or use: gsettings set org.gnome.desktop.screensaver lock-enabled true"
-        - "gsettings set org.gnome.desktop.session idle-delay 900"
-      windows:
-        - "Open Settings > Accounts > Sign-in options"
-        - "Under 'Require sign-in', select '15 minutes'"
-        - "Open Settings > Personalization > Lock screen"
-        - "Configure screen timeout settings"
+    description: "Verify disk encryption is enabled"
+    linux:
+      - output: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,UUID,ENCRYPTED
+        excludes: "ENCRYPTED.*1|luks"
+        remediation:
+          - Enable full disk encryption using LUKS
+          - Run 'sudo cryptsetup luksFormat /dev/sdX' for each unencrypted partition
+          - Update /etc/crypttab and /etc/fstab accordingly
+    darwin:
+      - output: fdesetup status
+        includes: "FileVault is Off|Encryption Not Enabled"
+        remediation:
+          - Enable FileVault encryption
+          - Go to System Preferences > Security & Privacy > FileVault
+          - Click "Turn On FileVault"
+    freebsd:
+      - output: sudo geli status 2>/dev/null || doas geli status 2>/dev/null || geli status
+        includes: "No such geom"
+        remediation:
+          - Enable GELI disk encryption
+          - See FreeBSD Handbook chapter on disk encryption
+          - Use 'geli init' to initialize encrypted providers
+    openbsd:
+      - output: doas bioctl softraid0
+        includes: "No such device|not configured"
+        remediation:
+          - Enable softraid crypto volume
+          - See OpenBSD FAQ on full disk encryption
+          - Use bioctl to create encrypted volumes
+    netbsd:
+      - output: sudo cgdconfig -l 2>/dev/null || cgdconfig -l
+        excludes: "cgd[0-9]"
+        remediation:
+          - Enable CGD (CryptoGraphic Disk) encryption
+          - Configure /etc/cgd/cgd.conf
+          - See NetBSD guide on CGD configuration
+    windows:
+      - output: manage-bde -status
+        includes: "Protection Off|Encryption Percentage.*0%"
+        remediation:
+          - Enable BitLocker encryption
+          - Go to Control Panel > BitLocker Drive Encryption
+          - Click "Turn on BitLocker" for each drive
 
   auto_login:
-    commands:
-      darwin:
-        # Check if automatic login is enabled
-        - defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
-        - defaults read /Library/Preferences/com.apple.loginwindow autoLoginUserUID
-      linux:
-        # Check GDM auto login settings
-        - cat /etc/gdm3/custom.conf
-        - cat /etc/gdm/custom.conf
-        # Check LightDM auto login
-        - cat /etc/lightdm/lightdm.conf
-        # Check SDDM auto login
-        - cat /etc/sddm.conf
-        # Check systemd auto login
-        - systemctl get-default
-        - cat /etc/systemd/system/getty@tty1.service.d/autologin.conf
-    remediation:
-      darwin:
-        - "Open System Settings > Users & Groups"
-        - "Click the lock to make changes"
-        - "Click 'Login Options'"
-        - "Set 'Automatic login' to 'Off'"
-        - "Or use command line:"
-        - "sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser"
-        - "sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUserUID"
-      linux:
-        - "For GDM (GNOME):"
-        - "Edit /etc/gdm3/custom.conf or /etc/gdm/custom.conf"
-        - "Remove or comment out 'AutomaticLoginEnable=true'"
-        - "Remove or comment out 'AutomaticLogin=username'"
-        - "For LightDM: Edit /etc/lightdm/lightdm.conf"
-        - "Remove or comment out 'autologin-user=username'"
-        - "Restart the display manager after changes"
+    description: "Check for automatic login configuration"
+    darwin:
+      - output: defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
+        exitcode: 0
+        remediation:
+          - Disable automatic login
+          - Go to System Preferences > Users & Groups > Login Options
+          - Set "Automatic login" to "Off"
+    linux:
+      - file: /etc/gdm3/custom.conf
+        includes: "AutomaticLoginEnable\\s*=\\s*true"
+        remediation:
+          - Comment out or remove AutomaticLoginEnable=true in /etc/gdm3/custom.conf
+          - Restart GDM service with 'sudo systemctl restart gdm3'
+      - file: /etc/lightdm/lightdm.conf
+        includes: "autologin-user\\s*="
+        remediation:
+          - Comment out or remove autologin-user line in /etc/lightdm/lightdm.conf
+          - Restart LightDM service
+    windows:
+      - output: reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon
+        includes: "AutoAdminLogon.*REG_SZ.*1"
+        remediation:
+          - Disable automatic login
+          - Run 'netplwiz' and check "Users must enter a user name and password"
+
+  firewall:
+    description: "Verify system firewall is enabled"
+    darwin:
+      - output: /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+        includes: "disabled|off"
+        remediation:
+          - Enable the firewall
+          - Go to System Preferences > Security & Privacy > Firewall
+          - Click "Turn On Firewall"
+    linux:
+      - output: ufw status
+        includes: "Status: inactive"
+        remediation:
+          - Enable UFW firewall with 'sudo ufw enable'
+      - output: firewall-cmd --state
+        includes: "not running"
+        remediation:
+          - Enable firewalld with 'sudo systemctl enable --now firewalld'
+      - output: iptables -L -n
+        excludes: "Chain (INPUT|FORWARD|OUTPUT)"
+        remediation:
+          - Configure iptables rules for basic protection
+    freebsd:
+      # Try sudo first, then doas
+      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null
+        includes: "Status: Disabled"
+        remediation:
+          - Enable PF firewall with 'sudo pfctl -e'
+          - Configure /etc/pf.conf
+          - Add pf_enable="YES" to /etc/rc.conf
+    openbsd:
+      # OpenBSD primarily uses doas
+      - output: doas pfctl -s info
+        includes: "Status: Disabled"
+        remediation:
+          - Enable PF firewall with 'doas pfctl -e'
+          - Configure /etc/pf.conf
+    netbsd:
+      - output: sudo npfctl show 2>/dev/null || npfctl show
+        includes: "inactive"
+        remediation:
+          - Enable NPF firewall
+          - Configure /etc/npf.conf
+          - Add npf=YES to /etc/rc.conf
+    dragonfly:
+      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null
+        includes: "Status: Disabled"
+        remediation:
+          - Enable PF firewall with 'sudo pfctl -e'
+          - Configure /etc/pf.conf
+    illumos:
+      - output: ipfstat -io
+        includes: "empty list"
+        remediation:
+          - Configure IP Filter firewall
+          - Enable with 'svcadm enable ipfilter'
+    solaris:
+      - output: svcs -xv ipfilter
+        includes: "disabled"
+        remediation:
+          - Enable IP Filter firewall
+          - Run 'svcadm enable ipfilter'
+          - Configure /etc/ipf/ipf.conf
+    windows:
+      - output: netsh advfirewall show allprofiles | findstr State
+        includes: "State.*OFF"
+        remediation:
+          - Enable Windows Firewall
+          - Run 'netsh advfirewall set allprofiles state on'
+
+  screen_lock_password:
+    description: "Verify that screen lock requires a password"
+    darwin:
+      # Check if screen lock password is disabled (checks both old and new locations)
+      # Note: If both commands fail (exit code 1), it means password is likely enabled
+      - output: defaults -currentHost read com.apple.screensaver askForPassword 2>&1 || defaults read com.apple.screensaver askForPassword 2>&1 || echo "1"
+        includes: "^0$"
+        remediation:
+          - Enable password requirement for screen saver
+          - Go to System Settings > Lock Screen (macOS 13+) or System Preferences > Security & Privacy (older macOS)
+          - Set "Require password after screen saver begins or display is turned off" to enabled
+      # Check the delay before password is required (in seconds)
+      - output: >
+          defaults -currentHost read com.apple.screensaver askForPasswordDelay 2>&1 ||
+          defaults read com.apple.screensaver askForPasswordDelay 2>&1 || echo "0"
+        includes: "^(6[0-9]|[7-9][0-9]|[1-9][0-9]{2,})$"
+        remediation:
+          - Set screen lock delay to 5 seconds or less
+          - Go to System Settings > Lock Screen
+          - Set "Require password after..." to 5 seconds or less
+    linux:
+      - output: gsettings get org.gnome.desktop.screensaver lock-enabled
+        includes: "false"
+        remediation:
+          - Enable screen lock with 'gsettings set org.gnome.desktop.screensaver lock-enabled true'
+    windows:
+      - output: >
+          powershell -Command "(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop'
+          -Name ScreenSaverIsSecure -ErrorAction SilentlyContinue).ScreenSaverIsSecure"
+        includes: "^0$"
+        remediation:
+          - Enable password requirement for screensaver
+          - Go to Settings > Accounts > Sign-in options
+          - Set "Require sign-in" to "When PC wakes up from sleep"
+  screensaver_timeout:
+    description: "Verify that screensaver activates within 15 minutes of inactivity"
+    darwin:
+      # Check screensaver idle time (in seconds)
+      # 900 seconds = 15 minutes, fail if greater than 900 or disabled (0)
+      - output: defaults -currentHost read com.apple.screensaver idleTime 2>&1 || echo "0"
+        includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
+        remediation:
+          - Set screensaver to activate within 15 minutes (900 seconds)
+          - Go to System Settings > Lock Screen
+          - Set "Turn display off on battery when inactive" to 15 minutes or less
+          - Set "Turn display off on power adapter when inactive" to 15 minutes or less
+    linux:
+      # Check screensaver idle delay (in seconds) - fail if 0 or > 900
+      - output: gsettings get org.gnome.desktop.session idle-delay 2>&1 | grep -o '[0-9]*' || echo "0"
+        includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
+        remediation:
+          - Set screensaver timeout to 15 minutes or less
+          - Run 'gsettings set org.gnome.desktop.session idle-delay 900'
+    windows:
+      # Check screensaver timeout in seconds (fail if 0 or > 900)
+      - output: >
+          powershell -Command "(Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop'
+          -Name ScreenSaveTimeOut -ErrorAction SilentlyContinue).ScreenSaveTimeOut"
+        includes: "^(0|9[1-9][0-9]|[1-9][0-9]{3,})$"
+        remediation:
+          - Set screensaver timeout to 15 minutes or less
+          - Go to Settings > Personalization > Lock screen
+          - Set "Screen timeout" to 15 minutes or less
+
+  system_uptime:
+    description: "Verify system has been rebooted within 6 months"
+    # Most Unix systems support the uptime command similarly
+    unix:
+      # Check uptime in days (fail if > 180 days / 6 months)
+      # Parse uptime to get days (returns 0 if less than a day)
+      - output: >
+          uptime | grep -oE 'up [0-9]+ days?' | grep -oE '[0-9]+' || echo "0"
+        includes: "^(18[1-9]|19[0-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})$"
+        remediation:
+          - System has been running for more than 6 months without a reboot
+          - Reboot the system to apply accumulated security patches
+          - Schedule regular maintenance windows for updates and reboots
+    linux:
+      # Linux can also use /proc/uptime for more precision
+      - output: awk '{print int($1/86400)}' /proc/uptime
+        includes: "^(18[1-9]|19[0-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})$"
+        remediation:
+          - System has been running for more than 6 months without a reboot
+          - Reboot the system to apply kernel and security patches
+          - Schedule regular maintenance windows for updates and reboots
+    windows:
+      # Get uptime in days using wmic
+      - output: >
+          powershell -Command "((Get-Date) - (gcim Win32_OperatingSystem).LastBootUpTime).Days"
+        includes: "^(18[1-9]|19[0-9]|[2-9][0-9]{2}|[1-9][0-9]{3,})$"
+        remediation:
+          - System has been running for more than 6 months without a reboot
+          - Reboot the system to apply Windows updates
+          - Enable automatic restart after updates in Windows Update settings
+
+  automatic_updates:
+    description: "Verify automatic updates are enabled"
+    darwin:
+      # Check if automatic check for updates is enabled
+      - output: defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled
+        includes: "^0$"
+        remediation:
+          - Enable automatic update checks
+          - "Run: sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true"
+      # Check if automatic download of updates is enabled
+      - output: defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload
+        includes: "^0$"
+        remediation:
+          - Enable automatic download of updates
+          - "Run: sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool true"
+      # Check if critical updates auto-install is enabled
+      - output: defaults read /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall
+        includes: "^0$"
+        remediation:
+          - Enable automatic installation of critical updates
+          - "Run: sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true"
+      # Check if automatic app updates from App Store are enabled
+      - output: defaults read /Library/Preferences/com.apple.commerce AutoUpdate
+        includes: "^0$"
+        remediation:
+          - Enable automatic App Store updates
+          - "Run: sudo defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool true"
+    linux:
+      # Check for unattended-upgrades on Debian/Ubuntu
+      - output: dpkg -l unattended-upgrades 2>/dev/null | grep '^ii'
+        excludes: "unattended-upgrades"
+        remediation:
+          - Install unattended-upgrades package
+          - "Run: sudo apt install unattended-upgrades"
+          - "Enable with: sudo dpkg-reconfigure -plow unattended-upgrades"
+      # Check if auto-upgrades is enabled
+      - file: /etc/apt/apt.conf.d/20auto-upgrades
+        includes: 'APT::Periodic::Unattended-Upgrade\s+"0"'
+        remediation:
+          - Enable automatic security updates
+          - Edit /etc/apt/apt.conf.d/20auto-upgrades
+          - Set APT::Periodic::Unattended-Upgrade "1"
+      # Check for yum-cron on RHEL/CentOS
+      - output: systemctl is-enabled yum-cron 2>/dev/null
+        includes: "disabled"
+        remediation:
+          - Enable automatic updates with yum-cron
+          - "Run: sudo systemctl enable --now yum-cron"
+      # Check for dnf-automatic on Fedora
+      - output: systemctl is-enabled dnf-automatic.timer 2>/dev/null
+        includes: "disabled"
+        remediation:
+          - Enable automatic updates with dnf-automatic
+          - "Run: sudo systemctl enable --now dnf-automatic.timer"
+    windows:
+      # Check Windows Update service status
+      - output: sc query wuauserv | findstr STATE
+        includes: "STOPPED"
+        remediation:
+          - Start Windows Update service
+          - "Run: sc start wuauserv"
+          - "Enable service: sc config wuauserv start=auto"
+      # Check automatic updates policy
+      - output: reg query "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate 2>nul
+        includes: "NoAutoUpdate.*REG_DWORD.*0x1"
+        remediation:
+          - Enable automatic updates
+          - Open Settings > Update & Security > Windows Update
+          - Click "Advanced options" and enable automatic updates
+
+  available_updates:
+    description: "Check for critical security updates"
+    darwin:
+      - output: softwareupdate -l
+        includes: "Software Update found|recommended|restart"
+        remediation:
+          - Install available updates with 'sudo softwareupdate -ia'
+          - Enable automatic updates in System Preferences > Software Update
+    linux:
+      # Check for critical security-related package updates
+      - output: apt list --upgradable 2>/dev/null | grep -E 'glibc|kernel|xml|ssh|sudo|doas|systemd|pam|auth'
+        includes: "upgradable"
+        remediation:
+          - Critical security updates are available
+          - Update package list with 'sudo apt update'
+          - Install critical updates with 'sudo apt upgrade'
+          - Enable unattended-upgrades for automatic security updates
+      - output: yum check-update | grep -E 'glibc|kernel|xml|ssh|sudo|doas|systemd|pam|auth'
+        includes: "."
+        remediation:
+          - Critical security updates are available
+          - Install updates with 'sudo yum update'
+          - Enable automatic updates with yum-cron
+      - output: zypper list-updates | grep -E 'glibc|kernel|xml|ssh|sudo|doas|systemd|pam|auth'
+        includes: "v |"
+        remediation:
+          - Critical security updates are available
+          - Install updates with 'sudo zypper update'
+          - Configure automatic updates in /etc/zypp/zypper.conf
+    windows:
+      - output: wmic qfe list brief /format:table | findstr /i "KB"
+        excludes: "KB[0-9]+"
+        remediation:
+          - Check for updates in Settings > Update & Security > Windows Update
+          - Install all available updates
 
   password_policy:
-    commands:
-      linux:
-        - cat /etc/login.defs
-      darwin:
-        - pwpolicy getaccountpolicies
-      freebsd,dragonfly,netbsd:
-        - cat /etc/pam.d/system
-      openbsd:
-        - cat /etc/login.conf
-      solaris,illumos:
-        - cat /etc/default/passwd
-    remediation:
-      darwin:
-        - "Open System Settings > Touch ID & Password (or Users & Groups)"
-        - "Click on 'Change Password...'"
-        - "Use a strong password with at least 12 characters"
-        - "For enterprise policy, use pwpolicy command:"
-        - "sudo pwpolicy -setglobalpolicy 'minChars=12'"
-        - "sudo pwpolicy -setglobalpolicy 'requiresAlpha=1'"
-        - "sudo pwpolicy -setglobalpolicy 'requiresNumeric=1'"
-      linux:
-        - "Edit /etc/pam.d/common-password (Debian/Ubuntu) or /etc/pam.d/system-auth (RHEL)"
-        - "Add password quality requirements using pam_pwquality.so:"
-        - "password requisite pam_pwquality.so minlen=12 ucredit=-1 lcredit=-1 dcredit=-1"
-        - "Edit /etc/login.defs:"
-        - "Set PASS_MAX_DAYS to 90 or less"
-        - "Set PASS_MIN_LEN to 12 or more"
+    description: "Verify minimum password length meets NIST guidelines"
+    darwin:
+      # Check for weak password length (less than 8 characters per NIST SP 800-63B)
+      - output: pwpolicy getaccountpolicies
+        includes: "\\.\\{[1-7],\\}|<dict/>|does not exist"
+        remediation:
+          - Set minimum password length to at least 8 characters (NIST SP 800-63B)
+          - "Run: sudo pwpolicy -n /Local/Default -setglobalpolicy 'minChars=8'"
+          - Do NOT require complexity (uppercase, numbers, symbols) per NIST guidelines
+          - Do NOT require periodic password changes unless compromised
+          - Do NOT enforce password history (reuse prevention) per NIST guidelines
+          - Consider checking passwords against known breach lists instead
 
-  software_updates:
-    commands:
-      linux:
-        # Check multiple package managers
-        - apt list --upgradable
-        - yum check-update
-        - dnf check-update
-        - zypper list-updates
-        - pacman -Qu
-      darwin:
-        - softwareupdate -l
-      freebsd,dragonfly:
-        - pkg audit
-      openbsd:
-        - syspatch -c
-      netbsd:
-        - pkg_admin audit
-      solaris,illumos:
-        - pkg list -u
-    remediation:
-      darwin:
-        - "Open System Settings > General > Software Update"
-        - "Click 'Update Now' to install available updates"
-        - "Enable 'Automatic Updates' for security updates"
-        - "Or use command line:"
-        - "List updates: softwareupdate -l"
-        - "Install all updates: sudo softwareupdate -ia"
-        - "Install only recommended: sudo softwareupdate -ir"
-      linux:
-        - "For Debian/Ubuntu:"
-        - "Update package list: sudo apt update"
-        - "Upgrade packages: sudo apt upgrade"
-        - "Full upgrade: sudo apt full-upgrade"
-        - "For RHEL/Fedora:"
-        - "Update packages: sudo dnf update"
-        - "For Arch: sudo pacman -Syu"
+  password_quality:
+    description: "Verify password quality enforcement"
+    linux:
+      - file: /etc/pam.d/common-password
+        excludes: "pam_pwquality.so|pam_cracklib.so"
+        remediation:
+          - Install libpam-pwquality package
+          - Configure minimum length in /etc/security/pwquality.conf with 'minlen=8'
+          - Do NOT set complexity requirements per NIST SP 800-63B
+      - file: /etc/login.defs
+        includes: "PASS_MIN_LEN.*[0-7]([^0-9]|$)"
+        remediation:
+          - Set PASS_MIN_LEN to at least 8 in /etc/login.defs
+          - Do NOT enforce password aging or complexity per NIST guidelines
+    windows:
+      - output: net accounts
+        includes: "Minimum password length.*[0-7]([^0-9]|$)"
+        remediation:
+          - "Set minimum password length to 8: 'net accounts /minpwlen:8'"
+          - Or configure via Group Policy Editor (gpedit.msc)
+          - Do NOT require complexity per NIST SP 800-63B guidelines
+          - Do NOT require password expiration unless compromised
+          - Do NOT enforce password history per NIST guidelines
 
   antivirus:
-    commands:
-      linux:
-        - systemctl is-active clamav-daemon
-        # Use ps to check for AV processes
-        - ps aux
-      darwin:
-        # Check for XProtect (Apple's built-in antivirus)
-        - pgrep -l XProtect
-      windows:
-        - 'wmic.exe /namespace:\\root\SecurityCenter2 path AntiVirusProduct get displayName,productState'
-    remediation:
-      darwin:
-        - "macOS includes XProtect and Malware Removal Tool (MRT) by default"
-        - "Ensure XProtect is running: pgrep -l XProtect"
-        - "Keep macOS updated to get the latest malware definitions"
-        - "XProtect updates automatically in the background"
-        - "For additional protection:"
-        - "Enable Gatekeeper: spctl --master-enable"
-        - "Keep System Integrity Protection (SIP) enabled"
-      linux:
-        - "Install ClamAV:"
-        - "Ubuntu/Debian: sudo apt install clamav clamav-daemon"
-        - "RHEL/Fedora: sudo dnf install clamav clamav-update"
-        - "Update virus database: sudo freshclam"
-        - "Enable daemon: sudo systemctl enable clamav-daemon"
-        - "Start daemon: sudo systemctl start clamav-daemon"
+    description: "Detect antivirus/anti-malware software"
+    darwin:
+      - output: system_profiler SPInstallHistoryDataType | grep -i "xprotect\|malware"
+        excludes: "XProtect|MRT"
+        remediation:
+          - macOS includes built-in XProtect antivirus
+          - Ensure system updates are enabled to keep XProtect updated
+    linux:
+      - output: systemctl status clamav-daemon
+        includes: "inactive|not found"
+        remediation:
+          - Install ClamAV with 'sudo apt install clamav clamav-daemon'
+          - Start service with 'sudo systemctl enable --now clamav-daemon'
+      - output: which rkhunter
+        exitcode: 1
+        remediation:
+          - Install rkhunter for rootkit detection
+          - Configure regular scans with cron
+    windows:
+      - output: sc query WinDefend
+        includes: "STOPPED"
+        remediation:
+          - Enable Windows Defender
+          - Go to Settings > Update & Security > Windows Security
 
   system_info:
-    commands:
-      linux:
-        - cat /etc/os-release
-      darwin:
-        - sw_vers
-      freebsd:
-        - freebsd-version -ku
-      openbsd,netbsd,dragonfly:
-        - uname -rsv
-      solaris,illumos:
-        - cat /etc/release
-      windows:
-        - systeminfo.exe
+    description: "Gather system information"
+    darwin:
+      - output: sw_vers
+    linux:
+      - file: /etc/os-release
+    freebsd:
+      - output: freebsd-version
+    openbsd:
+      - output: sysctl -n kern.version
+    netbsd:
+      - output: sysctl -n kern.version
+    dragonfly:
+      - output: sysctl -n kern.version
+    solaris:
+      - file: /etc/release
+    illumos:
+      - file: /etc/release
+    windows:
+      - output: systeminfo | findstr /B /C:"OS Name" /C:"OS Version"

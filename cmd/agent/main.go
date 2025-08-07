@@ -17,11 +17,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
-	"gitmdm/cmd/agent/analyzer"
+	"gitmdm/internal/analyzer"
+	"gitmdm/internal/config"
 	"gitmdm/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
@@ -58,23 +60,13 @@ var (
 	listChecks = flag.Bool("list", false, "List available compliance checks")
 	interval   = flag.Duration("interval", 20*time.Minute, "Polling interval")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
+	verbose    = flag.Bool("verbose", false, "Show all check outputs, not just failures (with --run all)")
 	quiet      = false // Set to true to suppress INFO logs (used for interactive mode)
 )
 
-// ChecksConfig holds the configuration for compliance checks.
-type ChecksConfig struct {
-	Checks map[string]CheckDefinition `yaml:"checks"`
-}
-
-// CheckDefinition holds commands and remediation steps for a check.
-type CheckDefinition struct {
-	Commands    map[string][]string `yaml:"commands"`
-	Remediation map[string][]string `yaml:"remediation"`
-}
-
 // Agent represents the gitMDM agent that collects compliance data.
 type Agent struct {
-	config        *ChecksConfig
+	config        *config.Config
 	httpClient    *http.Client
 	failedReports chan gitmdm.DeviceReport
 	serverURL     string
@@ -87,8 +79,8 @@ type Agent struct {
 func main() {
 	flag.Parse()
 
-	var config ChecksConfig
-	if err := yaml.Unmarshal(checksConfig, &config); err != nil {
+	var cfg config.Config
+	if err := yaml.Unmarshal(checksConfig, &cfg); err != nil {
 		log.Fatalf("Failed to parse checks config: %v", err)
 	}
 
@@ -108,7 +100,7 @@ func main() {
 	}
 
 	agent := &Agent{
-		config:     &config,
+		config:     &cfg,
 		hardwareID: hardwareID(),
 		hostname:   hostname,
 		user:       user,
@@ -208,7 +200,12 @@ func (a *Agent) reportToServer(ctx context.Context) {
 		log.Printf("[DEBUG] Generated report with %d checks in %v", len(report.Checks), time.Since(start))
 	}
 
+	retryCount := 0
 	err := retry.Do(func() error {
+		retryCount++
+		if retryCount > 1 {
+			log.Printf("[INFO] Retry attempt %d/%d for sending report", retryCount, maxRetries)
+		}
 		return a.sendReport(ctx, report)
 	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 	if err != nil {
@@ -256,7 +253,7 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 		// Read response body for debugging (limit to 256 bytes)
 		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 256))
 		if err != nil {
-			return fmt.Errorf("server returned status %d (failed to read body: %v)", resp.StatusCode, err)
+			return fmt.Errorf("server returned status %d (failed to read body: %w)", resp.StatusCode, err)
 		}
 		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -315,59 +312,28 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 		log.Printf("[DEBUG] Running %d checks for OS: %s", len(a.config.Checks), osName)
 	}
 
-	for checkName, checkDef := range a.config.Checks {
+	for checkName := range a.config.Checks {
+		checkDef := a.config.Checks[checkName]
 		checkStart := time.Now()
-		var commands []string
 
-		// First check exact OS match
-		if cmds, exists := checkDef.Commands[osName]; exists {
-			commands = cmds
-		} else {
-			// Check for comma-separated OS lists
-			found := false
-			for osListKey, cmds := range checkDef.Commands {
-				osList := strings.Split(osListKey, ",")
-				for _, osItem := range osList {
-					if strings.TrimSpace(osItem) == osName {
-						commands = cmds
-						found = true
-						break
-					}
-				}
-				if found {
-					break
-				}
+		// Get the rules for this OS
+		rules := checkDef.CommandsForOS(osName)
+		if len(rules) == 0 {
+			if *debug {
+				log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
 			}
-
-			// Finally check for "all"
-			if !found {
-				cmds, exists := checkDef.Commands["all"]
-				if !exists {
-					if *debug {
-						log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
-					}
-					continue
-				}
-				commands = cmds
-			}
+			continue
 		}
 
-		// Run all commands for this check
+		// Run all rules for this check
 		var outputs []gitmdm.CommandOutput
-		for _, command := range commands {
-			output := a.executeCommandWithPipes(ctx, checkName, command)
+		for _, rule := range rules {
+			output := a.executeCheck(ctx, checkName, rule)
 			outputs = append(outputs, output)
 		}
 
 		// Analyze all outputs to determine status
-		status, reason, remediation := a.analyzeCheckOutputs(checkName, osName, outputs)
-
-		// If no remediation from analyzer and check failed, use YAML remediation
-		if status == "fail" && len(remediation) == 0 {
-			if steps, exists := checkDef.Remediation[osName]; exists {
-				remediation = steps
-			}
-		}
+		status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
 
 		check := gitmdm.Check{
 			Timestamp:   time.Now(), // Set the timestamp when the check was performed
@@ -400,95 +366,10 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 	return checks
 }
 
-// analyzeCheckOutputs analyzes all command outputs for a check and determines status.
-// Returns status ("pass", "fail", "n/a"), a reason, and command-specific remediation steps.
-// For most checks: If ANY command passes, the check passes.
-// For screen_lock: ALL commands must pass for the check to pass (SOC 2 requirement).
-func (a *Agent) analyzeCheckOutputs(checkName string, osName string, outputs []gitmdm.CommandOutput) (string, string, []string) {
-	if len(outputs) == 0 {
-		return "n/a", "No commands to execute", nil
-	}
-
-	var passReasons []string
-	var failReasons []string
-	var remediation []string
-	hasPass := false
-	hasFail := false
-	allNA := true
-
-	for _, output := range outputs {
-		// Analyze this specific command output
-		result := analyzer.AnalyzeCheck(checkName, osName, output.Command, output.Stdout, output.Stderr, output.ExitCode)
-
-		switch result.Status {
-		case "pass":
-			hasPass = true
-			allNA = false
-			passReasons = append(passReasons, result.Description)
-			if *debug {
-				log.Printf("[DEBUG] Check %s command '%s' passed: %s", checkName, output.Command, result.Description)
-			}
-		case "fail":
-			hasFail = true
-			allNA = false
-			failReasons = append(failReasons, result.Description)
-			// Collect command-specific remediation
-			if len(result.Remediation) > 0 {
-				remediation = append(remediation, result.Remediation...)
-			}
-			if *debug {
-				log.Printf("[DEBUG] Check %s command '%s' failed: %s", checkName, output.Command, result.Description)
-			}
-		default: // "n/a"
-			if *debug {
-				log.Printf("[DEBUG] Check %s command '%s' n/a: %s", checkName, output.Command, result.Description)
-			}
-		}
-	}
-
-	// Special handling for screen_lock - ALL checks must pass for SOC 2 compliance
-	if checkName == "screen_lock" {
-		// If ANY check failed, the whole check fails
-		if hasFail {
-			if len(failReasons) == 1 {
-				return "fail", failReasons[0], remediation
-			}
-			return "fail", strings.Join(failReasons, "; "), remediation
-		}
-		// All must pass (or be n/a)
-		if hasPass && !hasFail {
-			if len(passReasons) == 1 {
-				return "pass", passReasons[0], nil
-			}
-			return "pass", "Screen lock properly configured", nil
-		}
-		// If all are N/A
-		if allNA {
-			return "n/a", "", nil
-		}
-	}
-
-	// Default logic for other checks: If ANY command passes, the check passes
-	if hasPass {
-		if len(passReasons) > 0 {
-			return "pass", passReasons[0], nil
-		}
-		return "pass", "", nil
-	}
-
-	// If all are N/A, return n/a with empty reason
-	if allNA {
-		return "n/a", "", nil
-	}
-
-	// Otherwise, it failed - combine all failure reasons
-	if len(failReasons) == 1 {
-		return "fail", failReasons[0], remediation
-	}
-	return "fail", strings.Join(failReasons, "; "), remediation
-}
-
 func (a *Agent) runSingleCheck(checkName string) string {
+	// Use a 60-second timeout for single check execution
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	osName := runtime.GOOS
 
 	checkDef, exists := a.config.Checks[checkName]
@@ -496,73 +377,56 @@ func (a *Agent) runSingleCheck(checkName string) string {
 		return fmt.Sprintf("Check '%s' not found", checkName)
 	}
 
-	var commands []string
-	// First check exact OS match
-	if cmds, exists := checkDef.Commands[osName]; exists {
-		commands = cmds
-	} else {
-		// Check for comma-separated OS lists
-		found := false
-		for osListKey, cmds := range checkDef.Commands {
-			osList := strings.Split(osListKey, ",")
-			for _, osItem := range osList {
-				if strings.TrimSpace(osItem) == osName {
-					commands = cmds
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-
-		// Finally check for "all"
-		if !found {
-			cmds, exists := checkDef.Commands["all"]
-			if !exists {
-				return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
-			}
-			commands = cmds
-		}
+	// Get the rules for this OS
+	rules := checkDef.CommandsForOS(osName)
+	if len(rules) == 0 {
+		return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
 	}
 
 	var outputBuilder strings.Builder
 	var outputs []gitmdm.CommandOutput
 
-	for i, command := range commands {
+	for i, rule := range rules {
 		if i > 0 {
-			outputBuilder.WriteString("\n\n=== Command " + fmt.Sprintf("%d", i+1) + " ===\n")
-		}
-		outputBuilder.WriteString("Command: " + command + "\n")
-
-		check := a.executeCommandWithPipes(context.Background(), checkName, command)
-		outputs = append(outputs, check)
-
-		if check.Stdout != "" {
-			outputBuilder.WriteString(check.Stdout)
-		}
-		if check.Stderr != "" {
-			outputBuilder.WriteString("\n--- STDERR ---\n" + check.Stderr)
-		}
-		if check.ExitCode != 0 {
-			outputBuilder.WriteString(fmt.Sprintf("\n--- EXIT CODE: %d ---", check.ExitCode))
+			outputBuilder.WriteString("\n\n=== Rule " + fmt.Sprintf("%d", i+1) + " ===\n")
 		}
 
-		// Analyze this specific command
-		result := analyzer.AnalyzeCheck(checkName, osName, command, check.Stdout, check.Stderr, check.ExitCode)
-		outputBuilder.WriteString(fmt.Sprintf("\n--- ANALYSIS: %s - %s ---", result.Status, result.Description))
+		// Display what we're checking
+		if rule.File != "" {
+			outputBuilder.WriteString("File: " + rule.File + "\n")
+		} else if rule.Output != "" {
+			outputBuilder.WriteString("Command: " + rule.Output + "\n")
+		}
+
+		output := a.executeCheck(ctx, checkName, rule)
+		outputs = append(outputs, output)
+
+		if output.FileMissing {
+			outputBuilder.WriteString("File not found\n")
+		} else if output.Skipped {
+			outputBuilder.WriteString("Command not available\n")
+		} else {
+			if output.Stdout != "" {
+				outputBuilder.WriteString(output.Stdout)
+			}
+			if output.Stderr != "" {
+				outputBuilder.WriteString("\n--- STDERR ---\n" + output.Stderr)
+			}
+			if output.ExitCode != 0 {
+				outputBuilder.WriteString(fmt.Sprintf("\n--- EXIT CODE: %d ---", output.ExitCode))
+			}
+		}
+
+		// Show analysis for this specific rule
+		if output.Failed {
+			outputBuilder.WriteString(fmt.Sprintf("\n--- FAILED: %s ---", output.FailReason))
+		} else if !output.Skipped && !output.FileMissing {
+			outputBuilder.WriteString("\n--- PASSED ---")
+		}
 	}
 
 	// Overall status analysis
-	status, reason, remediation := a.analyzeCheckOutputs(checkName, osName, outputs)
-
-	// If no remediation from analyzer and check failed, use YAML remediation
-	if status == "fail" && len(remediation) == 0 {
-		if steps, exists := checkDef.Remediation[osName]; exists {
-			remediation = steps
-		}
-	}
+	status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
 
 	outputBuilder.WriteString("\n\n=== OVERALL RESULT ===")
 	switch status {
@@ -756,15 +620,38 @@ func solarisHardwareID() string {
 	output, err := cmd.Output()
 	if err != nil {
 		if *debug {
-			log.Printf("[DEBUG] Failed to get Solaris/illumos host ID: %v", err)
+			log.Printf("[DEBUG] Failed to get Solaris host ID: %v", err)
 		}
 		return ""
 	}
 	id := strings.TrimSpace(string(output))
 	if *debug {
-		log.Printf("[DEBUG] Found Solaris/illumos host ID: %s", id)
+		log.Printf("[DEBUG] Found Solaris host ID: %s", id)
 	}
 	return id
+}
+
+func illumosHardwareID() string {
+	// Try sysinfo first (Illumos specific)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sysinfo", "-p")
+	output, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "UUID=") {
+				id := strings.TrimPrefix(line, "UUID=")
+				id = strings.TrimSpace(id)
+				if *debug {
+					log.Printf("[DEBUG] Found Illumos UUID: %s", id)
+				}
+				return id
+			}
+		}
+	}
+	// Fall back to hostid
+	return solarisHardwareID()
 }
 
 func windowsHardwareID() string {
@@ -806,8 +693,10 @@ func hardwareID() string {
 		id = linuxHardwareID()
 	case "freebsd", "openbsd", "netbsd", "dragonfly":
 		id = bsdHardwareID()
-	case "solaris", "illumos":
+	case "solaris":
 		id = solarisHardwareID()
+	case "illumos":
+		id = illumosHardwareID()
 	case "windows":
 		id = windowsHardwareID()
 	default:
@@ -847,83 +736,38 @@ func (a *Agent) listAvailableChecks() {
 	log.Println("╰─────────────────────────────────────────────────╯")
 	log.Println()
 
-	// Categories for organization
-	categories := map[string][]string{
-		"🔒 Security": {"disk_encryption", "firewall", "app_firewall", "screen_lock", "auto_login", "password_policy", "antivirus"},
-		"🔄 System":   {"software_updates", "system_info", "hostname", "uname"},
-		"👥 Access":   {"users", "network"},
-	}
-
-	// Order to display categories
-	categoryOrder := []string{"🔒 Security", "🔄 System", "👥 Access"}
-
-	for _, category := range categoryOrder {
-		checks := categories[category]
-		log.Printf("%s\n", category)
-		log.Println(strings.Repeat("─", 50))
-
-		for _, checkName := range checks {
-			if checkDef, exists := a.config.Checks[checkName]; exists {
-				// Check if available for this OS
-				available := false
-				if _, exists := checkDef.Commands[osName]; exists {
-					available = true
-				} else if _, exists := checkDef.Commands["all"]; exists {
-					available = true
-				} else {
-					// Check comma-separated OS lists
-					for osListKey := range checkDef.Commands {
-						osList := strings.Split(osListKey, ",")
-						for _, osItem := range osList {
-							if strings.TrimSpace(osItem) == osName {
-								available = true
-								break
-							}
-						}
-						if available {
-							break
-						}
-					}
-				}
-
-				if available {
-					// Get description based on check type
-					description := getCheckDescription(checkName)
-					log.Printf("  %-20s %s\n", checkName, description)
-				}
+	// List all checks available for this OS
+	var availableChecks []string
+	maxNameLen := 0
+	for checkName := range a.config.Checks {
+		checkDef := a.config.Checks[checkName]
+		rules := checkDef.CommandsForOS(osName)
+		if len(rules) > 0 {
+			availableChecks = append(availableChecks, checkName)
+			if len(checkName) > maxNameLen {
+				maxNameLen = len(checkName)
 			}
 		}
-		log.Println()
 	}
 
+	// Sort checks alphabetically
+	sort.Strings(availableChecks)
+
+	// Display checks with descriptions from YAML
+	for _, checkName := range availableChecks {
+		checkDef := a.config.Checks[checkName]
+		description := checkDef.Description
+		if description == "" {
+			description = "Compliance check"
+		}
+		log.Printf("  %-*s  %s\n", maxNameLen, checkName, description)
+	}
+
+	log.Println()
 	log.Println("Usage:")
 	log.Println("  Run a single check:  agent -run <check_name>")
 	log.Println("  Run all checks:      agent -run all")
 	log.Println()
-}
-
-// getCheckDescription returns a human-friendly description for each check
-func getCheckDescription(checkName string) string {
-	descriptions := map[string]string{
-		"disk_encryption":  "Verify disk encryption status",
-		"firewall":         "Check network firewall configuration",
-		"app_firewall":     "Check application firewall (macOS)",
-		"screen_lock":      "Verify screen lock settings",
-		"auto_login":       "Check for automatic login",
-		"password_policy":  "Review password policy configuration",
-		"antivirus":        "Detect antivirus software",
-		"software_updates": "Check for pending system updates",
-		"system_info":      "Gather system information",
-		"hostname":         "Display system hostname",
-		"uname":            "Show system version details",
-		"users":            "List system users",
-		"network":          "Display network configuration",
-	}
-
-	if desc, exists := descriptions[checkName]; exists {
-		return desc
-	}
-	return "System compliance check"
 }
 
 // CheckResult represents the results of running a security check.
@@ -932,6 +776,7 @@ type CheckResult struct {
 	Reason      string
 	Remediation []string
 	Commands    []string
+	Outputs     []gitmdm.CommandOutput
 }
 
 // CheckResultSummary contains summary stats for check execution.
@@ -939,6 +784,15 @@ type CheckResultSummary struct {
 	PassCount int
 	FailCount int
 	NACount   int
+}
+
+// print is a helper for interactive mode output without timestamps
+func print(format string, args ...interface{}) {
+	if format == "" {
+		fmt.Println() //nolint:forbidigo // Interactive mode requires direct output
+	} else {
+		fmt.Printf(format+"\n", args...) //nolint:forbidigo // Interactive mode requires direct output
+	}
 }
 
 // runAllChecksInteractive runs all available checks and displays results in a modern format.
@@ -949,73 +803,68 @@ func (a *Agent) runAllChecksInteractive() {
 	defer func() { quiet = oldQuiet }()
 
 	osName := runtime.GOOS
-	log.Println("🔍 Running security checks...")
-	log.Println()
+	print("🔍 Running compliance checks...")
+	print("")
 
-	// Get checks to run in proper order
+	// Get all available checks for this OS
 	var availableChecks []string
-	for checkName, checkDef := range a.config.Checks {
-		if a.isCheckAvailable(checkDef, osName) {
+	for checkName := range a.config.Checks {
+		checkDef := a.config.Checks[checkName]
+		rules := checkDef.CommandsForOS(osName)
+		if len(rules) > 0 {
 			availableChecks = append(availableChecks, checkName)
 		}
 	}
-	finalOrder := a.orderChecks(availableChecks)
+
+	// Sort alphabetically for consistent output
+	sort.Strings(availableChecks)
 
 	// Execute all checks
-	results, summary := a.executeAllChecks(finalOrder, osName)
+	results, summary := a.executeAllChecks(availableChecks, osName)
 
 	// Display results
-	a.displayCheckResults(results, finalOrder, summary)
-}
-
-// isCheckAvailable determines if a check is available for the given OS.
-func (*Agent) isCheckAvailable(checkDef CheckDefinition, osName string) bool {
-	if _, exists := checkDef.Commands[osName]; exists {
-		return true
-	}
-	if _, exists := checkDef.Commands["all"]; exists {
-		return true
-	}
-
-	// Check comma-separated OS lists
-	for osListKey := range checkDef.Commands {
-		osList := strings.Split(osListKey, ",")
-		for _, osItem := range osList {
-			if strings.TrimSpace(osItem) == osName {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// orderChecks sorts checks into preferred execution order.
-func (*Agent) orderChecks(availableChecks []string) []string {
-	checkOrder := []string{
-		"disk_encryption", "firewall", "app_firewall", "screen_lock", "auto_login",
-		"password_policy", "antivirus", "software_updates",
-		"system_info", "hostname", "uname", "users", "network",
-	}
-
-	var finalOrder []string
-	for _, check := range checkOrder {
-		for _, available := range availableChecks {
-			if check == available {
-				finalOrder = append(finalOrder, check)
-				break
-			}
-		}
-	}
-	return finalOrder
+	a.displayCheckResults(results, availableChecks, summary)
 }
 
 // executeAllChecks runs all specified checks and returns results and summary.
 func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string]CheckResult, CheckResultSummary) {
 	results := make(map[string]CheckResult)
 	summary := CheckResultSummary{}
+	// Use a reasonable timeout for all checks (5 minutes)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	for _, checkName := range checkNames {
-		result := a.executeSingleCheck(checkName, osName)
+		checkDef := a.config.Checks[checkName]
+		rules := checkDef.CommandsForOS(osName)
+
+		// Execute all rules for this check
+		var outputs []gitmdm.CommandOutput
+		for _, rule := range rules {
+			output := a.executeCheck(ctx, checkName, rule)
+			outputs = append(outputs, output)
+		}
+
+		// Analyze results
+		status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
+
+		// Extract commands/files from outputs for display
+		var commands []string
+		for _, output := range outputs {
+			if output.Command != "" {
+				commands = append(commands, output.Command)
+			} else if output.File != "" {
+				commands = append(commands, "file: "+output.File)
+			}
+		}
+
+		result := CheckResult{
+			Status:      status,
+			Reason:      reason,
+			Remediation: remediation,
+			Commands:    commands,
+			Outputs:     outputs,
+		}
 		results[checkName] = result
 
 		// Update summary
@@ -1032,83 +881,34 @@ func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string
 	return results, summary
 }
 
-// executeSingleCheck executes a single check and returns the result.
-func (a *Agent) executeSingleCheck(checkName, osName string) CheckResult {
-	checkDef := a.config.Checks[checkName]
-	commands := a.getCommandsForOS(checkDef, osName)
-
-	// Execute commands
-	var outputs []gitmdm.CommandOutput
-	for _, command := range commands {
-		output := a.executeCommandWithPipes(context.Background(), checkName, command)
-		outputs = append(outputs, output)
-	}
-
-	// Analyze results
-	status, reason, remediation := a.analyzeCheckOutputs(checkName, osName, outputs)
-
-	// Use YAML remediation if analyzer didn't provide any
-	if status == "fail" && len(remediation) == 0 {
-		if steps, exists := checkDef.Remediation[osName]; exists {
-			remediation = steps
-		}
-	}
-
-	return CheckResult{
-		Status:      status,
-		Reason:      reason,
-		Remediation: remediation,
-		Commands:    commands,
-	}
-}
-
-// getCommandsForOS gets the appropriate commands for the given OS.
-func (*Agent) getCommandsForOS(checkDef CheckDefinition, osName string) []string {
-	if cmds, exists := checkDef.Commands[osName]; exists {
-		return cmds
-	}
-	if cmds, exists := checkDef.Commands["all"]; exists {
-		return cmds
-	}
-
-	// Check comma-separated OS lists
-	for osListKey, cmds := range checkDef.Commands {
-		osList := strings.Split(osListKey, ",")
-		for _, osItem := range osList {
-			if strings.TrimSpace(osItem) == osName {
-				return cmds
-			}
-		}
-	}
-	return nil
-}
-
 // displayCheckResults shows the check results in a formatted way.
 func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder []string, summary CheckResultSummary) {
-	log.Println()
+	print("")
 
+	// In verbose mode, show all checks
+	if *verbose {
+		a.displayAllChecks(results, finalOrder, summary)
+		return
+	}
+
+	// Normal mode - show summary and failures only
 	if summary.FailCount > 0 {
 		pluralS := ""
 		if summary.FailCount != 1 {
 			pluralS = "s"
 		}
-		log.Printf("⚠️  %d issue%s require attention\n\n", summary.FailCount, pluralS)
+		print("⚠️  %d issue%s require attention", summary.FailCount, pluralS)
+		print("")
 		a.displayFailedChecks(results, finalOrder)
 	} else {
-		log.Println("✅ All systems secure")
-		log.Println()
+		print("✅ All compliance checks passed")
+		print("")
 	}
 
-	// Only show passed checks if there are no failures
-	if summary.FailCount == 0 && summary.PassCount > 0 {
-		pluralS := ""
-		if summary.PassCount != 1 {
-			pluralS = "s"
-		}
-		log.Printf("✅ %d check%s passed\n", summary.PassCount, pluralS)
-	}
-
-	log.Println()
+	// Show summary at the end
+	print("Summary: %d passed, %d failed, %d not applicable",
+		summary.PassCount, summary.FailCount, summary.NACount)
+	print("")
 }
 
 // displayFailedChecks shows details for all failed checks.
@@ -1125,23 +925,158 @@ func (a *Agent) displayFailedChecks(results map[string]CheckResult, finalOrder [
 		result := results[checkName]
 		// Display single failed check inline
 		displayName := strings.ReplaceAll(checkName, "_", " ")
-		log.Printf("🔸 %s\n", displayName)
-		log.Printf("   🐞 Problem: %s\n", result.Reason)
-		if len(result.Commands) > 0 {
-			log.Printf("   💻 Evidence: %s\n", strings.Join(result.Commands, " && "))
+		print("🔸 %s", displayName)
+		print("   🐞 Problem: %s", result.Reason)
+
+		// Show evidence - command and output for failed checks
+		if len(result.Outputs) > 0 {
+			print("   💻 Evidence:")
+			for _, output := range result.Outputs {
+				// Skip outputs that didn't fail
+				if !output.Failed {
+					continue
+				}
+
+				// Show command or file that was checked
+				if output.Command != "" {
+					print("      Command: %s", output.Command)
+				} else if output.File != "" {
+					print("      File: %s", output.File)
+				}
+
+				// Show relevant output (truncated for readability)
+				if output.Stdout != "" {
+					lines := strings.Split(output.Stdout, "\n")
+					maxLines := 5
+					if len(lines) > maxLines {
+						print("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
+						print("      ... (output truncated, %d more lines)", len(lines)-maxLines)
+					} else {
+						print("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
+					}
+				}
+
+				if output.Stderr != "" && output.Stderr != output.FailReason {
+					print("      Error: %s", output.Stderr)
+				}
+			}
 		}
+
 		if len(result.Remediation) > 0 {
-			log.Printf("\n   🔧 How to fix:\n")
+			print("")
+			print("   🔧 How to fix:")
 			for j, step := range result.Remediation {
-				log.Printf("      %d. %s\n", j+1, step)
+				print("      %d. %s", j+1, step)
 			}
 		}
 
 		// Add spacing between issues (but not after the last one)
 		if i < len(failedChecks)-1 {
-			log.Println()
-			log.Println("   ─────────────────────────")
-			log.Println()
+			print("")
+			print("   ─────────────────────────")
+			print("")
 		}
 	}
+}
+
+// displayAllChecks shows all checks in verbose mode
+func (a *Agent) displayAllChecks(results map[string]CheckResult, checkOrder []string, summary CheckResultSummary) {
+	print("═══════════════════════════════════════════════════════════════")
+	print(" COMPLIANCE CHECK RESULTS (Verbose Mode)")
+	print("═══════════════════════════════════════════════════════════════")
+	print("")
+
+	for _, checkName := range checkOrder {
+		result, exists := results[checkName]
+		if !exists {
+			continue
+		}
+
+		// Check header with status icon
+		var statusIcon string
+		var statusColor string
+		switch result.Status {
+		case "pass":
+			statusIcon = "✅"
+			statusColor = "PASS"
+		case "fail":
+			statusIcon = "❌"
+			statusColor = "FAIL"
+		default:
+			statusIcon = "➖"
+			statusColor = "N/A"
+		}
+
+		displayName := strings.ToUpper(strings.ReplaceAll(checkName, "_", " "))
+		print("%s %s [%s]", statusIcon, displayName, statusColor)
+		print("───────────────────────────────────────────────────────────────")
+
+		// Show all command outputs
+		for _, output := range result.Outputs {
+			if output.Command != "" {
+				print("Command: %s", output.Command)
+			} else if output.File != "" {
+				print("File: %s", output.File)
+			}
+
+			if output.FileMissing {
+				print("Result: File not found")
+			} else if output.Skipped {
+				print("Result: Command not available")
+			} else {
+				// Show output
+				if output.Stdout != "" {
+					lines := strings.Split(strings.TrimRight(output.Stdout, "\n"), "\n")
+					if len(lines) > 20 {
+						print("Output (%d lines, showing first 20):", len(lines))
+						for i := 0; i < 20; i++ {
+							print("  %s", lines[i])
+						}
+						print("  ... (%d more lines)", len(lines)-20)
+					} else {
+						print("Output:")
+						for _, line := range lines {
+							print("  %s", line)
+						}
+					}
+				}
+
+				if output.Stderr != "" {
+					print("Stderr: %s", output.Stderr)
+				}
+
+				if output.ExitCode != 0 {
+					print("Exit Code: %d", output.ExitCode)
+				}
+			}
+
+			if output.Failed {
+				print("Status: FAILED - %s", output.FailReason)
+			} else {
+				print("Status: OK")
+			}
+			print("")
+		}
+
+		// Show remediation if failed
+		if result.Status == "fail" && len(result.Remediation) > 0 {
+			print("Remediation Steps:")
+			for i, step := range result.Remediation {
+				print("  %d. %s", i+1, step)
+			}
+			print("")
+		}
+
+		print("")
+	}
+
+	// Summary at the end
+	print("═══════════════════════════════════════════════════════════════")
+	print(" SUMMARY")
+	print("═══════════════════════════════════════════════════════════════")
+	print("  Passed:         %d", summary.PassCount)
+	print("  Failed:         %d", summary.FailCount)
+	print("  Not Applicable: %d", summary.NACount)
+	print("  Total:          %d", summary.PassCount+summary.FailCount+summary.NACount)
+	print("")
 }

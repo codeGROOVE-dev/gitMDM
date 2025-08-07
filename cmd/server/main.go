@@ -177,8 +177,9 @@ func main() {
 		store, err = gitstore.NewRemote(ctx, *gitURL)
 	}
 	if err != nil {
+		log.Printf("[ERROR] Failed to initialize git store: %v", err)
 		cancel()
-		log.Fatalf("[ERROR] Failed to initialize git store: %v", err)
+		os.Exit(1)
 	}
 
 	// Create server
@@ -190,9 +191,9 @@ func main() {
 		"safeID": func(name string) string {
 			return strings.ReplaceAll(strings.ReplaceAll(name, "_", "-"), ".", "-")
 		},
-		"sub": func(a, b int) int { return a - b },
-		"add": func(a, b int) int { return a + b },
-		"mul": func(a, b int) int { return a * b },
+		"sub":  func(a, b int) int { return a - b },
+		"add":  func(a, b int) int { return a + b },
+		"mul":  func(a, b int) int { return a * b },
 		"mulf": func(a, b float64) float64 { return a * b },
 		"div": func(a, b int) int {
 			if b == 0 {
@@ -209,6 +210,9 @@ func main() {
 				}
 			}
 			return strings.Join(words, " ")
+		},
+		"contains": func(s, substr string) bool {
+			return strings.Contains(s, substr)
 		},
 	}
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "templates/*.html"))
@@ -749,7 +753,12 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		request.RemoteAddr, device.HardwareID, len(device.Checks), time.Since(start))
 
 	// Attempt to save to git store with graceful degradation
+	retryCount := 0
 	err := retry.Do(func() error {
+		retryCount++
+		if retryCount > 1 {
+			log.Printf("[INFO] Retry attempt %d/%d for saving device %s to git", retryCount, maxRetries, device.HardwareID)
+		}
 		return s.store.SaveDevice(ctx, device)
 	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 	if err != nil {
@@ -772,8 +781,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	}
 
 	// Always respond successfully since we have the data in memory
-	writer.WriteHeader(http.StatusOK)
 	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
 	if _, err := writer.Write([]byte(`{"status":"ok"}`)); err != nil {
 		log.Printf("[WARN] Error writing response: %v", err)
 	}
@@ -830,8 +839,8 @@ func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
 	response := fmt.Sprintf(`{"status":%q,"devices":%d,"requests":%d,"errors":%d}`,
 		status, deviceCount, requestCount, errorCount)
 
-	writer.WriteHeader(statusCode)
 	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(statusCode)
 	if _, err := writer.Write([]byte(response)); err != nil {
 		log.Printf("[WARN] Error writing health response: %v", err)
 	}
@@ -844,7 +853,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-lx2dNpe/W18YJvrDgNmLsDSM85bNRGfsh94PEHc787A='")
 
 		start := time.Now()
 		next.ServeHTTP(w, r)

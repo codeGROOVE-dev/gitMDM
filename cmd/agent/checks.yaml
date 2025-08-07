@@ -518,7 +518,7 @@ checks:
     darwin:
       # Check for weak password length (less than 8 characters per NIST SP 800-63B)
       - output: pwpolicy getaccountpolicies
-        includes: "\\.\\{[1-7],\\}|<dict/>|does not exist"
+        includes: "com\\.apple\\.policy\\.legacy\\.minChars.*minimumLength.*<integer>([1-7])</integer>|<dict/>|does not exist"
         remediation:
           - Set minimum password length to at least 8 characters (NIST SP 800-63B)
           - "Run: sudo pwpolicy -n /Local/Default -setglobalpolicy 'minChars=8'"
@@ -537,13 +537,13 @@ checks:
           - Configure minimum length in /etc/security/pwquality.conf with 'minlen=8'
           - Do NOT set complexity requirements per NIST SP 800-63B
       - file: /etc/login.defs
-        includes: "PASS_MIN_LEN.*[0-7]([^0-9]|$)"
+        includes: "PASS_MIN_LEN\s+[0-7]([^0-9]|$)"
         remediation:
           - Set PASS_MIN_LEN to at least 8 in /etc/login.defs
           - Do NOT enforce password aging or complexity per NIST guidelines
     windows:
       - output: net accounts
-        includes: "Minimum password length.*[0-7]([^0-9]|$)"
+        includes: "Minimum password length\s*:\s*[0-7]([^0-9]|$)"
         remediation:
           - "Set minimum password length to 8: 'net accounts /minpwlen:8'"
           - Or configure via Group Policy Editor (gpedit.msc)

@@ -34,14 +34,16 @@ const (
 	maxRetries     = 3
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 2 * time.Minute // Wait up to 2 minutes with exponential backoff
+	// Directory names.
+	devicesDir = "devices"
 )
 
 // Store provides Git-based storage for device compliance data using go-git.
 type Store struct {
+	auth     transport.AuthMethod
+	repo     *git.Repository
 	gitURL   string
 	repoPath string
-	repo     *git.Repository
-	auth     transport.AuthMethod
 	mu       sync.Mutex
 }
 
@@ -75,12 +77,11 @@ func NewLocal(ctx context.Context, localPath string) (*Store, error) {
 			}
 		}
 		return nil, fmt.Errorf("failed to check git repository: %w", err)
-	} else {
-		// Open existing repository
-		repo, err = git.PlainOpen(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open git repository: %w", err)
-		}
+	}
+	// Open existing repository
+	repo, err = git.PlainOpen(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
 
 	s := &Store{
@@ -101,7 +102,7 @@ func NewLocal(ctx context.Context, localPath string) (*Store, error) {
 	}
 
 	// Create devices directory if it doesn't exist
-	devicesDir := filepath.Join(s.repoPath, "devices")
+	devicesDir := filepath.Join(s.repoPath, devicesDir)
 	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
 		return nil, fmt.Errorf("failed to create devices directory: %w", err)
 	}
@@ -162,7 +163,6 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 		repo, cloneErr = git.PlainClone(tempDir, false, cloneOptions)
 		return cloneErr
 	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
 	if err != nil {
 		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
 			log.Printf("[WARN] Failed to clean up temp directory %s: %v", tempDir, removeErr)
@@ -188,7 +188,7 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 	}
 
 	// Create devices directory if needed
-	devicesDir := filepath.Join(s.repoPath, "devices")
+	devicesDir := filepath.Join(s.repoPath, devicesDir)
 	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
 		return nil, fmt.Errorf("failed to create devices directory: %w", err)
 	}
@@ -202,7 +202,7 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	deviceDir := filepath.Join(s.repoPath, "devices", sanitizeID(device.HardwareID))
+	deviceDir := filepath.Join(s.repoPath, devicesDir, sanitizeID(device.HardwareID))
 	if err := os.MkdirAll(deviceDir, deviceDirPerm); err != nil {
 		return fmt.Errorf("failed to create device directory: %w", err)
 	}
@@ -283,7 +283,11 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 			log.Printf("[DEBUG] Retry attempt %d/%d for git add (device %s)", retryCount, maxRetries, device.HardwareID)
 		}
 		return w.AddGlob("devices/*")
-	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
+	},
+		retry.Attempts(maxRetries),
+		retry.DelayType(retry.FullJitterBackoffDelay),
+		retry.Delay(initialBackoff),
+		retry.MaxDelay(maxBackoff)); err != nil {
 		log.Printf("[WARN] Git add failed for device %s after %d retries: %v", device.HardwareID, maxRetries, err)
 		return nil
 	}
@@ -308,7 +312,11 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 				},
 			})
 			return err
-		}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
+		},
+			retry.Attempts(maxRetries),
+			retry.DelayType(retry.FullJitterBackoffDelay),
+			retry.Delay(initialBackoff),
+			retry.MaxDelay(maxBackoff)); err != nil {
 			log.Printf("[WARN] Git commit failed for device %s: %v", device.HardwareID, err)
 			return nil
 		}
@@ -325,7 +333,11 @@ func (s *Store) SaveDevice(ctx context.Context, device *gitmdm.Device) error {
 					return nil
 				}
 				return err
-			}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff)); err != nil {
+			},
+				retry.Attempts(maxRetries),
+				retry.DelayType(retry.FullJitterBackoffDelay),
+				retry.Delay(initialBackoff),
+				retry.MaxDelay(maxBackoff)); err != nil {
 				log.Printf("[WARN] Git push failed for device %s: %v", device.HardwareID, err)
 			} else {
 				log.Printf("[DEBUG] Git push successful for device %s", device.HardwareID)
@@ -374,7 +386,7 @@ func (s *Store) LoadDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 		}
 	}
 
-	devicesDir := filepath.Join(s.repoPath, "devices")
+	devicesDir := filepath.Join(s.repoPath, devicesDir)
 	entries, err := os.ReadDir(devicesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -394,7 +406,7 @@ func (s *Store) LoadDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 
 		// Load device
 		dirName := entry.Name()
-		deviceDir := filepath.Join(s.repoPath, "devices", dirName)
+		deviceDir := filepath.Join(s.repoPath, devicesDir, dirName)
 
 		infoPath := filepath.Join(deviceDir, "info.json")
 		infoData, err := os.ReadFile(infoPath)
@@ -536,7 +548,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 	}
 
 	// Create devices directory
-	devicesDir := filepath.Join(repoPath, "devices")
+	devicesDir := filepath.Join(repoPath, devicesDir)
 	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
 		return fmt.Errorf("failed to create devices directory: %w", err)
 	}
@@ -548,7 +560,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 This directory contains compliance reports for all monitored devices.
 Each device has its own subdirectory identified by its hardware ID.
 `
-	if err := os.WriteFile(readmePath, []byte(readmeContent), 0644); err != nil {
+	if err := os.WriteFile(readmePath, []byte(readmeContent), 0o600); err != nil {
 		return fmt.Errorf("failed to create README: %w", err)
 	}
 

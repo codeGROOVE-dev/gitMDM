@@ -50,6 +50,14 @@ const (
 
 	// Failed reports queue size.
 	failedReportsQueueSize = 1000
+
+	// Hardware ID constants.
+	minHardwareIDLength = 10
+
+	// Compliance score thresholds.
+	excellentThreshold = 0.9
+	goodThreshold      = 0.7
+	fairThreshold      = 0.5
 )
 
 //go:embed templates/*
@@ -96,7 +104,9 @@ func generateJoinKeyFromHardwareID() string {
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS: Use hardware UUID
-		cmd := exec.Command("system_profiler", "SPHardwareDataType")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "system_profiler", "SPHardwareDataType")
 		if output, err := cmd.Output(); err == nil {
 			outputStr := string(output)
 			if idx := strings.Index(outputStr, "Hardware UUID:"); idx != -1 {
@@ -119,13 +129,17 @@ func generateJoinKeyFromHardwareID() string {
 		}
 	case "windows":
 		// Windows: Use wmic to get UUID
-		cmd := exec.Command("wmic", "csproduct", "get", "uuid", "/value")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "uuid", "/value")
 		if output, err := cmd.Output(); err == nil {
 			outputStr := string(output)
 			if idx := strings.Index(outputStr, "UUID="); idx != -1 {
 				id = strings.TrimSpace(strings.TrimPrefix(outputStr[idx:], "UUID="))
 			}
 		}
+	default:
+		// Other operating systems: fallback will be used
 	}
 
 	// Fallback to hostname-based ID
@@ -148,7 +162,7 @@ func generateJoinKeyFromHardwareID() string {
 	}, id)
 
 	// Take last 10 characters (or full string if shorter)
-	if len(cleanID) > 10 {
+	if len(cleanID) > minHardwareIDLength {
 		return strings.ToUpper(cleanID[len(cleanID)-10:])
 	}
 	return strings.ToUpper(cleanID)
@@ -179,7 +193,7 @@ func main() {
 	if err != nil {
 		log.Printf("[ERROR] Failed to initialize git store: %v", err)
 		cancel()
-		os.Exit(1)
+		return
 	}
 
 	// Create server
@@ -205,15 +219,13 @@ func main() {
 			// Convert snake_case to Title Case
 			words := strings.Split(strings.ReplaceAll(s, "_", " "), " ")
 			for i, word := range words {
-				if len(word) > 0 {
+				if word != "" {
 					words[i] = strings.ToUpper(word[:1]) + word[1:]
 				}
 			}
 			return strings.Join(words, " ")
 		},
-		"contains": func(s, substr string) bool {
-			return strings.Contains(s, substr)
-		},
+		"contains": strings.Contains,
 	}
 	tmpl := template.Must(template.New("").Funcs(funcMap).ParseFS(templates, "templates/*.html"))
 
@@ -242,10 +254,10 @@ func main() {
 
 	// Log configuration
 	log.Println("[INFO] ═══════════════════════════════════════════════════════════════")
-	log.Printf("[INFO] GitMDM Server Started")
+	log.Print("[INFO] GitMDM Server Started")
 	log.Printf("[INFO] Join Key: %s", *joinKey)
-	log.Printf("[INFO] ")
-	log.Printf("[INFO] To register an agent, run:")
+	log.Print("[INFO] ")
+	log.Print("[INFO] To register an agent, run:")
 	log.Printf("[INFO]   ./gitmdm-agent --server http://localhost:%s --join %s", *port, *joinKey)
 	log.Println("[INFO] ═══════════════════════════════════════════════════════════════")
 	log.Printf("[INFO] Retry configuration: max_retries=%d, initial_backoff=%v, max_backoff=%v",
@@ -293,7 +305,7 @@ func main() {
 	}
 }
 
-// Template function implementations
+// Template function implementations.
 
 func formatTimeFunc(t time.Time) string {
 	if t.IsZero() {
@@ -402,23 +414,7 @@ func (s *Server) processFailedReports(ctx context.Context) {
 			for {
 				select {
 				case device := <-s.failedReports:
-					// Retry failed device inline
-					log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
-					err := retry.Do(func() error {
-						return s.store.SaveDevice(ctx, device)
-					}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
-					if err != nil {
-						log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
-						// Re-queue if there's space, otherwise drop
-						select {
-						case s.failedReports <- device:
-						default:
-							log.Print("[WARN] Dropping failed device report - queue full")
-						}
-					} else {
-						log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
-					}
+					s.retryFailedDevice(ctx, device)
 				default:
 					// No more reports to process
 					goto nextTick
@@ -429,22 +425,45 @@ func (s *Server) processFailedReports(ctx context.Context) {
 	}
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (s *Server) retryFailedDevice(ctx context.Context, device *gitmdm.Device) {
+	log.Printf("[INFO] Retrying failed report for device %s", device.HardwareID)
+	err := retry.Do(func() error {
+		return s.store.SaveDevice(ctx, device)
+	},
+		retry.Attempts(maxRetries),
+		retry.DelayType(retry.FullJitterBackoffDelay),
+		retry.Delay(initialBackoff),
+		retry.MaxDelay(maxBackoff))
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to retry saving device %s: %v", device.HardwareID, err)
+		// Re-queue if there's space, otherwise drop
+		select {
+		case s.failedReports <- device:
+		default:
+			log.Print("[WARN] Dropping failed device report - queue full")
+		}
+	} else {
+		log.Printf("[INFO] Successfully saved queued device %s", device.HardwareID)
+	}
+}
+
+func (s *Server) handleIndex(writer http.ResponseWriter, req *http.Request) {
 	s.incrementRequestCount()
 
-	if r.URL.Path != "/" {
+	if req.URL.Path != "/" {
 		s.incrementErrorCount()
-		http.NotFound(w, r)
+		http.NotFound(writer, req)
 		return
 	}
 
 	// Get filter parameters
-	search := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
-	status := r.URL.Query().Get("status")
+	search := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("search")))
+	status := req.URL.Query().Get("status")
 
 	// Get pagination parameters
 	page := 1
-	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+	if pageStr := req.URL.Query().Get("page"); pageStr != "" {
 		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
 			page = p
 		}
@@ -478,16 +497,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			if item.PassCount+item.FailCount > 0 {
 				item.ComplianceScore = float64(item.PassCount) / float64(item.PassCount+item.FailCount)
 
-				if item.ComplianceScore >= 0.9 {
+				switch {
+				case item.ComplianceScore >= excellentThreshold:
 					item.ComplianceEmoji = "🏆" // Excellent
 					item.ComplianceClass = "excellent"
-				} else if item.ComplianceScore >= 0.7 {
+				case item.ComplianceScore >= goodThreshold:
 					item.ComplianceEmoji = "👍" // Good
 					item.ComplianceClass = "good"
-				} else if item.ComplianceScore >= 0.5 {
+				case item.ComplianceScore >= fairThreshold:
 					item.ComplianceEmoji = "😐" // Meh
 					item.ComplianceClass = "fair"
-				} else {
+				default:
 					item.ComplianceEmoji = "🔥" // This is fine
 					item.ComplianceClass = "poor"
 				}
@@ -525,6 +545,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 				if item.ComplianceScore > 0 {
 					continue
 				}
+			default:
+				// No filtering for unknown status
 			}
 		}
 
@@ -561,7 +583,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// Create view model with filter state
 	viewModel := viewmodels.DeviceListView{
 		Devices:     pagedDevices,
-		Search:      r.URL.Query().Get("search"), // Keep original case for display
+		Search:      req.URL.Query().Get("search"), // Keep original case for display
 		Status:      status,
 		Page:        page,
 		TotalPages:  totalPages,
@@ -570,28 +592,28 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasNext:     page < totalPages,
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "index.html", viewModel); err != nil {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmpl.ExecuteTemplate(writer, "index.html", viewModel); err != nil {
 		s.incrementErrorCount()
 		log.Printf("[ERROR] Template error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(writer, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 }
 
-func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDevice(writer http.ResponseWriter, r *http.Request) {
 	s.incrementRequestCount()
 
 	// Security: Only allow GET requests for device viewing
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(writer, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	hardwareID := strings.TrimPrefix(r.URL.Path, "/device/")
 	if hardwareID == "" {
 		s.incrementErrorCount()
-		http.NotFound(w, r)
+		http.NotFound(writer, r)
 		return
 	}
 
@@ -601,18 +623,18 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 
 	if !exists {
 		s.incrementErrorCount()
-		http.NotFound(w, r)
+		http.NotFound(writer, r)
 		return
 	}
 
 	// Build detailed view model with compliance analysis
 	viewData := viewmodels.BuildDeviceDetail(device)
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "device.html", viewData); err != nil {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmpl.ExecuteTemplate(writer, "device.html", viewData); err != nil {
 		s.incrementErrorCount()
 		log.Printf("[ERROR] Template error: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(writer, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 }
@@ -678,7 +700,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	if len(report.Hostname) > maxFieldLength {
 		s.incrementErrorCount()
 		log.Printf("[WARN] Hostname too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.Hostname), maxFieldLength)
-		http.Error(writer, fmt.Sprintf("Hostname too long: %d bytes exceeds %d byte limit", len(report.Hostname), maxFieldLength), http.StatusBadRequest)
+		errMsg := fmt.Sprintf("Hostname too long: %d bytes exceeds %d byte limit", len(report.Hostname), maxFieldLength)
+		http.Error(writer, errMsg, http.StatusBadRequest)
 		return
 	}
 	if len(report.User) > maxFieldLength {
@@ -712,7 +735,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 			s.incrementErrorCount()
 			log.Printf("[WARN] Check output too large from %s: %s (%d commands, total: %d bytes, limit: %d bytes)",
 				request.RemoteAddr, name, len(check.Outputs), totalOutput, maxCheckOutput)
-			http.Error(writer, fmt.Sprintf("Check output too large: %d bytes exceeds %d byte limit", totalOutput, maxCheckOutput), http.StatusBadRequest)
+			errMsg := fmt.Sprintf("Check output too large: %d bytes exceeds %d byte limit", totalOutput, maxCheckOutput)
+			http.Error(writer, errMsg, http.StatusBadRequest)
 			return
 		}
 	}
@@ -788,12 +812,12 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	}
 }
 
-func (s *Server) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAPIDevices(writer http.ResponseWriter, r *http.Request) {
 	s.incrementRequestCount()
 
 	if r.Method != http.MethodGet {
 		s.incrementErrorCount()
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		http.Error(writer, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -804,11 +828,11 @@ func (s *Server) handleAPIDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(devices); err != nil {
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(devices); err != nil {
 		s.incrementErrorCount()
 		log.Printf("[ERROR] Failed to encode devices: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(writer, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 }
@@ -847,16 +871,19 @@ func (s *Server) handleHealth(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(writer http.ResponseWriter, r *http.Request) {
 		// Security: Add comprehensive security headers
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'sha256-lx2dNpe/W18YJvrDgNmLsDSM85bNRGfsh94PEHc787A='")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.Header().Set("X-Frame-Options", "DENY")
+		writer.Header().Set("X-XSS-Protection", "1; mode=block")
+		writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		cspPolicy := "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
+			"script-src 'self' 'sha256-lx2dNpe/W18YJvrDgNmLsDSM85bNRGfsh94PEHc787A=' " +
+			"'sha256-luoavMkf5zRI42vsq0JhiXNoMTeddLeACqCCElcW+GE='"
+		writer.Header().Set("Content-Security-Policy", cspPolicy)
 
 		start := time.Now()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(writer, r)
 		duration := time.Since(start)
 
 		// Log with different levels based on duration and status

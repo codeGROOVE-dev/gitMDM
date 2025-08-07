@@ -17,7 +17,7 @@ import (
 func (a *Agent) executeCheck(ctx context.Context, checkName string, rule config.CommandRule) gitmdm.CommandOutput {
 	// Handle file checks
 	if rule.File != "" {
-		return a.readFile(ctx, checkName, rule)
+		return a.readFile(checkName, rule)
 	}
 
 	// Handle command checks
@@ -33,7 +33,7 @@ func (a *Agent) executeCheck(ctx context.Context, checkName string, rule config.
 }
 
 // readFile reads a file and returns its contents as a CommandOutput.
-func (a *Agent) readFile(ctx context.Context, checkName string, rule config.CommandRule) gitmdm.CommandOutput {
+func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.CommandOutput {
 	start := time.Now()
 
 	if *debug {

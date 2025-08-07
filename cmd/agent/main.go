@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"gitmdm/internal/analyzer"
+	"gitmdm/internal/config"
+	"gitmdm/internal/gitmdm"
 	"io"
 	"log"
 	"net/http"
@@ -18,13 +21,10 @@ import (
 	"os/signal"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"gitmdm/internal/analyzer"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
 
@@ -48,6 +48,14 @@ const (
 	httpTimeout = 30 * time.Second
 	// Queue size for failed reports.
 	failedReportsQueueSize = 100
+	// Response body read limit for error messages.
+	maxResponseBodyBytes = 256
+	// Display constants for interactive mode.
+	maxDisplayLines = 5
+	maxVerboseLines = 20
+	// Status constants.
+	statusFail = "fail"
+	statusPass = "pass"
 )
 
 //go:embed checks.yaml
@@ -251,7 +259,7 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 
 	if resp.StatusCode != http.StatusOK {
 		// Read response body for debugging (limit to 256 bytes)
-		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 		if err != nil {
 			return fmt.Errorf("server returned status %d (failed to read body: %w)", resp.StatusCode, err)
 		}
@@ -274,23 +282,7 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 			for {
 				select {
 				case report := <-a.failedReports:
-					// Retry failed report inline
-					log.Printf("[INFO] Retrying failed report for device %s", report.HardwareID)
-					err := retry.Do(func() error {
-						return a.sendReport(ctx, report)
-					}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
-
-					if err != nil {
-						log.Printf("[ERROR] Failed to retry report: %v", err)
-						// Re-queue if there's space, otherwise drop
-						select {
-						case a.failedReports <- report:
-						default:
-							log.Print("[WARN] Dropping failed report - queue full")
-						}
-					} else {
-						log.Print("[INFO] Successfully sent queued report")
-					}
+					a.retryFailedReport(ctx, report)
 				default:
 					// No more reports to process
 					goto nextTick
@@ -298,6 +290,29 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 			}
 		nextTick:
 		}
+	}
+}
+
+func (a *Agent) retryFailedReport(ctx context.Context, report gitmdm.DeviceReport) {
+	log.Printf("[INFO] Retrying failed report for device %s", report.HardwareID)
+	err := retry.Do(func() error {
+		return a.sendReport(ctx, report)
+	},
+		retry.Attempts(maxRetries),
+		retry.DelayType(retry.FullJitterBackoffDelay),
+		retry.Delay(initialBackoff),
+		retry.MaxDelay(maxBackoff))
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to retry report: %v", err)
+		// Re-queue if there's space, otherwise drop
+		select {
+		case a.failedReports <- report:
+		default:
+			log.Print("[WARN] Dropping failed report - queue full")
+		}
+	} else {
+		log.Print("[INFO] Successfully sent queued report")
 	}
 }
 
@@ -346,16 +361,17 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 
 		// Update counters based on status
 		switch status {
-		case "pass":
+		case statusPass:
 			successCount++
 			if *debug {
 				log.Printf("[DEBUG] Check %s passed in %v: %s", checkName, time.Since(checkStart), reason)
 			}
-		case "fail":
+		case statusFail:
 			failureCount++
 			if *debug {
 				log.Printf("[DEBUG] Check %s failed in %v: %s", checkName, time.Since(checkStart), reason)
 			}
+		default:
 			// "n/a" - no counter update
 		}
 	}
@@ -388,7 +404,7 @@ func (a *Agent) runSingleCheck(checkName string) string {
 
 	for i, rule := range rules {
 		if i > 0 {
-			outputBuilder.WriteString("\n\n=== Rule " + fmt.Sprintf("%d", i+1) + " ===\n")
+			outputBuilder.WriteString("\n\n=== Rule " + strconv.Itoa(i+1) + " ===\n")
 		}
 
 		// Display what we're checking
@@ -401,11 +417,12 @@ func (a *Agent) runSingleCheck(checkName string) string {
 		output := a.executeCheck(ctx, checkName, rule)
 		outputs = append(outputs, output)
 
-		if output.FileMissing {
+		switch {
+		case output.FileMissing:
 			outputBuilder.WriteString("File not found\n")
-		} else if output.Skipped {
+		case output.Skipped:
 			outputBuilder.WriteString("Command not available\n")
-		} else {
+		default:
 			if output.Stdout != "" {
 				outputBuilder.WriteString(output.Stdout)
 			}
@@ -430,9 +447,9 @@ func (a *Agent) runSingleCheck(checkName string) string {
 
 	outputBuilder.WriteString("\n\n=== OVERALL RESULT ===")
 	switch status {
-	case "pass":
+	case statusPass:
 		outputBuilder.WriteString(fmt.Sprintf("\n✅ PASS: %s", reason))
-	case "fail":
+	case statusFail:
 		outputBuilder.WriteString(fmt.Sprintf("\n❌ FAIL: %s", reason))
 		// Show command-specific remediation steps for failed checks
 		if len(remediation) > 0 {
@@ -725,7 +742,7 @@ func hardwareID() string {
 	return id
 }
 
-// listAvailableChecks lists all available compliance checks for the current OS
+// listAvailableChecks lists all available compliance checks for the current OS.
 func (a *Agent) listAvailableChecks() {
 	osName := runtime.GOOS
 
@@ -786,8 +803,8 @@ type CheckResultSummary struct {
 	NACount   int
 }
 
-// print is a helper for interactive mode output without timestamps
-func print(format string, args ...interface{}) {
+// print is a helper for interactive mode output without timestamps.
+func printLine(format string, args ...any) {
 	if format == "" {
 		fmt.Println() //nolint:forbidigo // Interactive mode requires direct output
 	} else {
@@ -803,8 +820,8 @@ func (a *Agent) runAllChecksInteractive() {
 	defer func() { quiet = oldQuiet }()
 
 	osName := runtime.GOOS
-	print("🔍 Running compliance checks...")
-	print("")
+	printLine("🔍 Running compliance checks...")
+	printLine("")
 
 	// Get all available checks for this OS
 	var availableChecks []string
@@ -869,9 +886,9 @@ func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string
 
 		// Update summary
 		switch result.Status {
-		case "pass":
+		case statusPass:
 			summary.PassCount++
-		case "fail":
+		case statusFail:
 			summary.FailCount++
 		default:
 			summary.NACount++
@@ -883,7 +900,7 @@ func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string
 
 // displayCheckResults shows the check results in a formatted way.
 func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder []string, summary CheckResultSummary) {
-	print("")
+	printLine("")
 
 	// In verbose mode, show all checks
 	if *verbose {
@@ -897,22 +914,22 @@ func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder [
 		if summary.FailCount != 1 {
 			pluralS = "s"
 		}
-		print("⚠️  %d issue%s require attention", summary.FailCount, pluralS)
-		print("")
+		printLine("⚠️  %d issue%s require attention", summary.FailCount, pluralS)
+		printLine("")
 		a.displayFailedChecks(results, finalOrder)
 	} else {
-		print("✅ All compliance checks passed")
-		print("")
+		printLine("✅ All compliance checks passed")
+		printLine("")
 	}
 
 	// Show summary at the end
-	print("Summary: %d passed, %d failed, %d not applicable",
+	printLine("Summary: %d passed, %d failed, %d not applicable",
 		summary.PassCount, summary.FailCount, summary.NACount)
-	print("")
+	printLine("")
 }
 
 // displayFailedChecks shows details for all failed checks.
-func (a *Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []string) {
+func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []string) {
 	// Get failed checks in order
 	var failedChecks []string
 	for _, checkName := range finalOrder {
@@ -921,16 +938,16 @@ func (a *Agent) displayFailedChecks(results map[string]CheckResult, finalOrder [
 		}
 	}
 
-	for i, checkName := range failedChecks {
+	for index, checkName := range failedChecks {
 		result := results[checkName]
 		// Display single failed check inline
 		displayName := strings.ReplaceAll(checkName, "_", " ")
-		print("🔸 %s", displayName)
-		print("   🐞 Problem: %s", result.Reason)
+		printLine("🔸 %s", displayName)
+		printLine("   🐞 Problem: %s", result.Reason)
 
 		// Show evidence - command and output for failed checks
 		if len(result.Outputs) > 0 {
-			print("   💻 Evidence:")
+			printLine("   💻 Evidence:")
 			for _, output := range result.Outputs {
 				// Skip outputs that didn't fail
 				if !output.Failed {
@@ -939,52 +956,52 @@ func (a *Agent) displayFailedChecks(results map[string]CheckResult, finalOrder [
 
 				// Show command or file that was checked
 				if output.Command != "" {
-					print("      Command: %s", output.Command)
+					printLine("      Command: %s", output.Command)
 				} else if output.File != "" {
-					print("      File: %s", output.File)
+					printLine("      File: %s", output.File)
 				}
 
 				// Show relevant output (truncated for readability)
 				if output.Stdout != "" {
 					lines := strings.Split(output.Stdout, "\n")
-					maxLines := 5
+					maxLines := maxDisplayLines
 					if len(lines) > maxLines {
-						print("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
-						print("      ... (output truncated, %d more lines)", len(lines)-maxLines)
+						printLine("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
+						printLine("      ... (output truncated, %d more lines)", len(lines)-maxLines)
 					} else {
-						print("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
+						printLine("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
 					}
 				}
 
 				if output.Stderr != "" && output.Stderr != output.FailReason {
-					print("      Error: %s", output.Stderr)
+					printLine("      Error: %s", output.Stderr)
 				}
 			}
 		}
 
 		if len(result.Remediation) > 0 {
-			print("")
-			print("   🔧 How to fix:")
+			printLine("")
+			printLine("   🔧 How to fix:")
 			for j, step := range result.Remediation {
-				print("      %d. %s", j+1, step)
+				printLine("      %d. %s", j+1, step)
 			}
 		}
 
 		// Add spacing between issues (but not after the last one)
-		if i < len(failedChecks)-1 {
-			print("")
-			print("   ─────────────────────────")
-			print("")
+		if index < len(failedChecks)-1 {
+			printLine("")
+			printLine("   ─────────────────────────")
+			printLine("")
 		}
 	}
 }
 
-// displayAllChecks shows all checks in verbose mode
-func (a *Agent) displayAllChecks(results map[string]CheckResult, checkOrder []string, summary CheckResultSummary) {
-	print("═══════════════════════════════════════════════════════════════")
-	print(" COMPLIANCE CHECK RESULTS (Verbose Mode)")
-	print("═══════════════════════════════════════════════════════════════")
-	print("")
+// displayAllChecks shows all checks in verbose mode.
+func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []string, summary CheckResultSummary) {
+	printLine("═══════════════════════════════════════════════════════════════")
+	printLine(" COMPLIANCE CHECK RESULTS (Verbose Mode)")
+	printLine("═══════════════════════════════════════════════════════════════")
+	printLine("")
 
 	for _, checkName := range checkOrder {
 		result, exists := results[checkName]
@@ -996,10 +1013,10 @@ func (a *Agent) displayAllChecks(results map[string]CheckResult, checkOrder []st
 		var statusIcon string
 		var statusColor string
 		switch result.Status {
-		case "pass":
+		case statusPass:
 			statusIcon = "✅"
 			statusColor = "PASS"
-		case "fail":
+		case statusFail:
 			statusIcon = "❌"
 			statusColor = "FAIL"
 		default:
@@ -1008,75 +1025,76 @@ func (a *Agent) displayAllChecks(results map[string]CheckResult, checkOrder []st
 		}
 
 		displayName := strings.ToUpper(strings.ReplaceAll(checkName, "_", " "))
-		print("%s %s [%s]", statusIcon, displayName, statusColor)
-		print("───────────────────────────────────────────────────────────────")
+		printLine("%s %s [%s]", statusIcon, displayName, statusColor)
+		printLine("───────────────────────────────────────────────────────────────")
 
 		// Show all command outputs
 		for _, output := range result.Outputs {
 			if output.Command != "" {
-				print("Command: %s", output.Command)
+				printLine("Command: %s", output.Command)
 			} else if output.File != "" {
-				print("File: %s", output.File)
+				printLine("File: %s", output.File)
 			}
 
-			if output.FileMissing {
-				print("Result: File not found")
-			} else if output.Skipped {
-				print("Result: Command not available")
-			} else {
+			switch {
+			case output.FileMissing:
+				printLine("Result: File not found")
+			case output.Skipped:
+				printLine("Result: Command not available")
+			default:
 				// Show output
 				if output.Stdout != "" {
 					lines := strings.Split(strings.TrimRight(output.Stdout, "\n"), "\n")
-					if len(lines) > 20 {
-						print("Output (%d lines, showing first 20):", len(lines))
-						for i := 0; i < 20; i++ {
-							print("  %s", lines[i])
+					if len(lines) > maxVerboseLines {
+						printLine("Output (%d lines, showing first 20):", len(lines))
+						for i := range maxVerboseLines {
+							printLine("  %s", lines[i])
 						}
-						print("  ... (%d more lines)", len(lines)-20)
+						printLine("  ... (%d more lines)", len(lines)-20)
 					} else {
-						print("Output:")
+						printLine("Output:")
 						for _, line := range lines {
-							print("  %s", line)
+							printLine("  %s", line)
 						}
 					}
 				}
 
 				if output.Stderr != "" {
-					print("Stderr: %s", output.Stderr)
+					printLine("Stderr: %s", output.Stderr)
 				}
 
 				if output.ExitCode != 0 {
-					print("Exit Code: %d", output.ExitCode)
+					printLine("Exit Code: %d", output.ExitCode)
 				}
 			}
 
 			if output.Failed {
-				print("Status: FAILED - %s", output.FailReason)
+				printLine("Status: FAILED - %s", output.FailReason)
 			} else {
-				print("Status: OK")
+				printLine("Status: OK")
 			}
-			print("")
+			printLine("")
 		}
 
 		// Show remediation if failed
-		if result.Status == "fail" && len(result.Remediation) > 0 {
-			print("Remediation Steps:")
+		if result.Status == statusFail && len(result.Remediation) > 0 {
+			printLine("Remediation Steps:")
 			for i, step := range result.Remediation {
-				print("  %d. %s", i+1, step)
+				printLine("  %d. %s", i+1, step)
 			}
-			print("")
+			printLine("")
 		}
 
-		print("")
+		printLine("")
 	}
 
 	// Summary at the end
-	print("═══════════════════════════════════════════════════════════════")
-	print(" SUMMARY")
-	print("═══════════════════════════════════════════════════════════════")
-	print("  Passed:         %d", summary.PassCount)
-	print("  Failed:         %d", summary.FailCount)
-	print("  Not Applicable: %d", summary.NACount)
-	print("  Total:          %d", summary.PassCount+summary.FailCount+summary.NACount)
-	print("")
+	printLine("═══════════════════════════════════════════════════════════════")
+	printLine(" SUMMARY")
+	printLine("═══════════════════════════════════════════════════════════════")
+	printLine("  Passed:         %d", summary.PassCount)
+	printLine("  Failed:         %d", summary.FailCount)
+	printLine("  Not Applicable: %d", summary.NACount)
+	printLine("  Total:          %d", summary.PassCount+summary.FailCount+summary.NACount)
+	printLine("")
 }

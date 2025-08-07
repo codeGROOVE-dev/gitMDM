@@ -1,325 +1,622 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Compliance Report: {{.Hostname}}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Hostname}} · Compliance Report</title>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            font-size: 15px; 
+        :root {
+            --color-canvas-default: #ffffff;
+            --color-canvas-subtle: #f6f8fa;
+            --color-canvas-inset: #f0f3f6;
+            --color-border-default: #d1d9e0;
+            --color-border-muted: #d1d9e0b3;
+            --color-fg-default: #1f2328;
+            --color-fg-muted: #656d76;
+            --color-fg-subtle: #6e7781;
+            --color-fg-on-emphasis: #ffffff;
+            --color-accent-fg: #0969da;
+            --color-accent-emphasis: #0969da;
+            --color-success-fg: #1a7f37;
+            --color-success-emphasis: #2da44e;
+            --color-success-subtle: #2da44e1a;
+            --color-danger-fg: #d1242f;
+            --color-danger-emphasis: #cf222e;
+            --color-danger-subtle: #cf222e1a;
+            --color-attention-fg: #9a6700;
+            --color-attention-emphasis: #bf8700;
+            --color-attention-subtle: #fff8c5;
+            --color-neutral-emphasis: #6e7781;
+            --color-neutral-subtle: #afb8c133;
+            --shadow-small: 0 1px 0 rgba(31, 35, 40, 0.04);
+            --shadow-medium: 0 3px 6px rgba(140, 149, 159, 0.15);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            font-size: 14px;
             line-height: 1.5;
-            margin: 20px;
-            padding: 0; 
-            color: #000;
-            background: white;
-            max-width: 1000px;
+            color: var(--color-fg-default);
+            background: var(--color-canvas-default);
         }
-        
-        .nav-back {
-            color: #0066cc;
-            text-decoration: none;
-            margin-bottom: 20px;
-            display: inline-block;
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px;
         }
-        
-        .nav-back:hover {
-            text-decoration: underline;
+
+        /* Header Navigation */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            font-size: 14px;
         }
-        
-        h1 { 
-            font-size: 24px; 
-            font-weight: 600;
-            margin: 0 0 20px 0; 
-            color: #000;
-        }
-        
-        h2 {
-            font-size: 18px;
-            font-weight: 600;
-            margin: 30px 0 15px 0;
-            color: #000;
-        }
-        
-        .device-summary {
-            margin: 20px 0;
-            padding: 15px 0;
-            border-bottom: 1px solid #ddd;
-            color: #666;
-        }
-        
-        .summary-line {
-            display: inline-block;
-            margin-right: 30px;
-        }
-        
-        .summary-label {
-            font-weight: 600;
-            color: #000;
-        }
-        
-        .summary-value {
-            color: #666;
-        }
-        
-        .summary-value.status-excellent {
-            color: #0A7C0A;
-            font-weight: 600;
-        }
-        
-        .summary-value.status-good {
-            color: #0066CC;
-            font-weight: 600;
-        }
-        
-        .summary-value.status-needs-attention {
-            color: #CC0000;
-            font-weight: 600;
-        }
-        
-        .checks-summary {
-            margin: 20px 0;
-        }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }
-        
-        th {
-            text-align: left;
-            padding: 10px 5px;
-            border-bottom: 2px solid #000;
-            font-weight: 600;
-        }
-        
-        td {
-            padding: 10px 5px;
-            border-bottom: 1px solid #eee;
-            vertical-align: top;
-        }
-        
-        tr:hover {
-            background: #f9f9f9;
-        }
-        
-        .status-pass {
-            color: #0A7C0A;
-            font-weight: 600;
-        }
-        
-        .status-fail {
-            color: #CC0000;
-            font-weight: 600;
-        }
-        
-        .status-na {
-            color: #999;
-        }
-        
-        a {
-            color: #0066cc;
+
+        .breadcrumb a {
+            color: var(--color-accent-fg);
             text-decoration: none;
         }
-        
-        a:hover {
+
+        .breadcrumb a:hover {
             text-decoration: underline;
         }
-        
-        .check-detail {
-            margin: 40px 0;
-            padding: 20px 0;
-            border-top: 1px solid #ddd;
+
+        .breadcrumb-separator {
+            margin: 0 8px;
+            color: var(--color-fg-muted);
         }
-        
-        .check-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 0 0 10px 0;
-            scroll-margin-top: 50px;
+
+        /* Page Header */
+        .page-header {
+            border-bottom: 1px solid var(--color-border-default);
+            padding-bottom: 16px;
+            margin-bottom: 24px;
         }
-        
-        .check-description {
-            color: #666;
-            margin: 10px 0;
+
+        .page-title {
+            font-size: 32px;
+            font-weight: 400;
+            margin-bottom: 8px;
         }
-        
-        .technical-details {
-            background: #f9f9f9;
-            padding: 15px;
-            margin: 15px 0;
-            border: 1px solid #eee;
+
+        .page-subtitle {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            color: var(--color-fg-muted);
         }
-        
-        .command {
-            background: #333;
-            color: #fff;
-            padding: 8px 12px;
-            font-family: monospace;
-            font-size: 13px;
-            margin: 8px 0;
+
+        .subtitle-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
-        
-        .output {
-            background: white;
-            border: 1px solid #ddd;
-            padding: 10px;
-            font-family: monospace;
+
+        /* Status Badge */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            border-radius: 2em;
             font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            margin: 8px 0;
+            font-weight: 500;
+            gap: 4px;
         }
-        
-        .output.error {
-            color: #8B0000;
+
+        .status-badge.success {
+            background: var(--color-success-subtle);
+            color: var(--color-success-fg);
         }
-        
-        .fix-section {
-            background: #fffbf0;
-            border: 1px solid #ffc107;
-            padding: 15px;
-            margin: 15px 0;
+
+        .status-badge.danger {
+            background: var(--color-danger-subtle);
+            color: var(--color-danger-fg);
         }
-        
-        .fix-section summary {
-            cursor: pointer;
+
+        .status-badge.neutral {
+            background: var(--color-neutral-subtle);
+            color: var(--color-neutral-emphasis);
+        }
+
+        .status-icon {
+            width: 16px;
+            height: 16px;
+            display: inline-block;
+        }
+
+        /* Summary Cards */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .summary-card {
+            background: var(--color-canvas-subtle);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            padding: 16px;
+        }
+
+        .summary-card-title {
+            font-size: 12px;
+            color: var(--color-fg-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .summary-card-value {
+            font-size: 24px;
             font-weight: 600;
-            color: #856404;
-            list-style: none;
+            color: var(--color-fg-default);
         }
-        
-        .fix-section summary::-webkit-details-marker {
+
+        .summary-card-value.success {
+            color: var(--color-success-emphasis);
+        }
+
+        .summary-card-value.danger {
+            color: var(--color-danger-emphasis);
+        }
+
+        /* Check List */
+        .checks-container {
+            margin-top: 32px;
+        }
+
+        .checks-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .checks-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .filter-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .filter-btn {
+            padding: 5px 12px;
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            background: var(--color-canvas-default);
+            color: var(--color-fg-default);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: var(--color-canvas-subtle);
+        }
+
+        .filter-btn.active {
+            background: var(--color-accent-emphasis);
+            color: var(--color-fg-on-emphasis);
+            border-color: var(--color-accent-emphasis);
+        }
+
+        /* Check Items */
+        .check-item {
+            background: var(--color-canvas-default);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+
+        .check-header {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        .check-header:hover {
+            background: var(--color-canvas-subtle);
+        }
+
+        .check-status-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            flex-shrink: 0;
+        }
+
+        .check-status-icon.pass {
+            color: var(--color-success-emphasis);
+        }
+
+        .check-status-icon.fail {
+            color: var(--color-danger-emphasis);
+        }
+
+        .check-status-icon.na {
+            color: var(--color-neutral-emphasis);
+        }
+
+        .check-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .check-name {
+            font-weight: 600;
+            color: var(--color-fg-default);
+            margin-bottom: 2px;
+        }
+
+        .check-description {
+            font-size: 12px;
+            color: var(--color-fg-muted);
+        }
+
+        .check-expand-icon {
+            width: 16px;
+            height: 16px;
+            color: var(--color-fg-muted);
+            transition: transform 0.2s;
+        }
+
+        .check-item.expanded .check-expand-icon {
+            transform: rotate(90deg);
+        }
+
+        /* Check Details */
+        .check-details {
             display: none;
+            border-top: 1px solid var(--color-border-muted);
+            background: var(--color-canvas-subtle);
         }
-        
-        .fix-steps {
-            margin: 15px 0 0 20px;
-            padding-left: 20px;
+
+        .check-item.expanded .check-details {
+            display: block;
         }
-        
-        .fix-steps li {
-            margin: 8px 0;
+
+        .detail-section {
+            padding: 16px;
+            border-bottom: 1px solid var(--color-border-muted);
         }
-        
+
+        .detail-section:last-child {
+            border-bottom: none;
+        }
+
+        .detail-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--color-fg-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .command-block {
+            background: var(--color-canvas-inset);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+
+        .command-prompt {
+            color: var(--color-fg-muted);
+            user-select: none;
+        }
+
+        .output-block {
+            background: var(--color-canvas-default);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            padding: 12px;
+            margin-top: 8px;
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .output-block.error {
+            background: var(--color-danger-subtle);
+            border-color: var(--color-danger-emphasis);
+            color: var(--color-danger-fg);
+        }
+
+        .remediation-block {
+            background: var(--color-attention-subtle);
+            border: 1px solid var(--color-attention-emphasis);
+            border-radius: 6px;
+            padding: 16px;
+        }
+
+        .remediation-title {
+            font-weight: 600;
+            color: var(--color-attention-fg);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .remediation-steps {
+            margin-left: 24px;
+            color: var(--color-fg-default);
+        }
+
+        .remediation-steps li {
+            margin: 4px 0;
+        }
+
+        /* Empty State */
         .empty-state {
-            padding: 40px;
             text-align: center;
-            color: #666;
+            padding: 48px 24px;
+            color: var(--color-fg-muted);
+        }
+
+        .empty-state-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 16px;
+            opacity: 0.4;
+        }
+
+        .empty-state-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--color-fg-default);
+        }
+
+        /* Icons */
+        .icon-check {
+            fill: currentColor;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+
+            .page-title {
+                font-size: 24px;
+            }
+
+            .summary-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <a href="/" class="nav-back">← Back to Compliance Dashboard</a>
-    
-    <h1>Compliance Report: {{.Hostname}}</h1>
-    
-    <div class="device-summary">
-        <span class="summary-line">
-            <span class="summary-label">User:</span> <span class="summary-value">{{.User}}</span>
-        </span>
-        <span class="summary-line">
-            <span class="summary-label">Last Update:</span> <span class="summary-value">{{.LastSeen | formatTime}} ({{.LastSeen | formatAgo}})</span>
-        </span>
-        <span class="summary-line">
-            <span class="summary-label">IP:</span> <span class="summary-value">{{if .LastIP}}{{.LastIP}}{{else}}—{{end}}</span>
-        </span>
-        <span class="summary-line">
-            {{$total := add .PassCount .FailCount}}
-            {{if gt $total 0}}
-                {{$score := div (mul .PassCount 100) $total}}
-                <span class="summary-label">Compliance:</span> <span class="summary-value status-{{if ge $score 90}}excellent{{else if ge $score 70}}good{{else}}needs-attention{{end}}">{{$score}}%</span>
-            {{else}}
-                <span class="summary-label">Compliance:</span> <span class="summary-value">—</span>
-            {{end}}
-        </span>
-    </div>
-    
-    {{if .CheckResults}}
-    <h2>Compliance Check Results</h2>
-    
-    <table>
-        <thead>
-            <tr>
-                <th>Check Name</th>
-                <th>Status</th>
-                <th>Details</th>
-            </tr>
-        </thead>
-        <tbody>
-            {{range $name := .SortedChecks}}
-            {{$result := index $.CheckResults $name}}
-            <tr>
-                <td><a href="#check-{{$name | safeID}}">{{$name | title}}</a></td>
-                <td>
-                    <span class="status-{{$result.Status}}">
-                        {{if eq $result.Status "pass"}}Pass{{else if eq $result.Status "fail"}}Fail{{else}}N/A{{end}}
-                    </span>
-                </td>
-                <td>{{if $result.Reason}}{{$result.Reason}}{{else}}—{{end}}</td>
-            </tr>
-            {{end}}
-        </tbody>
-    </table>
-    
-    <h2>Detailed Results</h2>
-    
-    {{range $name := .SortedChecks}}
-    {{$result := index $.CheckResults $name}}
-    {{$check := index $.Checks $name}}
-    
-    <div class="check-detail">
-        <h3 id="check-{{$name | safeID}}" class="check-title">
-            {{$name | title}} - 
-            <span class="status-{{$result.Status}}">
-                {{if eq $result.Status "pass"}}Pass{{else if eq $result.Status "fail"}}Fail{{else}}N/A{{end}}
-            </span>
-        </h3>
-        
-        {{if $result.Reason}}
-        <p class="check-description">{{$result.Reason}}</p>
-        {{end}}
-        
-        {{if $check}}
-        {{if $check.Outputs}}
-        <div class="technical-details">
-            {{range $output := $check.Outputs}}
-            <div class="command">$ {{$output.Command}}</div>
-            {{if $output.Stdout}}
-            <div class="output">{{truncateLines $output.Stdout 30}}</div>
-            {{end}}
-            {{if $output.Stderr}}
-                {{if and (eq $output.ExitCode -2) (contains $output.Stderr "Skipped:")}}
-                <div class="output" style="color: #666; font-style: italic;">{{$output.Stderr}}</div>
-                {{else}}
-                <div class="output error">{{truncateLines $output.Stderr 10}}</div>
+    <div class="container">
+        <!-- Breadcrumb Navigation -->
+        <nav class="breadcrumb">
+            <a href="/">Compliance Dashboard</a>
+            <span class="breadcrumb-separator">/</span>
+            <span>{{.Hostname}}</span>
+        </nav>
+
+        <!-- Page Header -->
+        <header class="page-header">
+            <h1 class="page-title">{{.Hostname}}</h1>
+            <div class="page-subtitle">
+                <div class="subtitle-item">
+                    <svg class="status-icon" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/>
+                    </svg>
+                    {{.User}}
+                </div>
+                <div class="subtitle-item">
+                    <svg class="status-icon" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/>
+                    </svg>
+                    Updated {{.LastSeen | formatAgo}}
+                </div>
+                {{if .LastIP}}
+                <div class="subtitle-item">
+                    <svg class="status-icon" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M1.543 7.25h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.506 6.506 0 0 0-4.666 5.5Zm2.733 1.5H1.543a6.506 6.506 0 0 0 4.666 5.5 11.13 11.13 0 0 1-.353-.552c-.714-1.192-1.436-2.874-1.58-4.948Zm1.504 0h4.44a9.637 9.637 0 0 1-1.363 4.177c-.306.51-.612.919-.857 1.215a9.978 9.978 0 0 1-.857-1.215A9.637 9.637 0 0 1 5.78 8.75Zm4.44-1.5H5.78c.144-1.836.744-3.352 1.363-4.177.245-.325.551-.705.857-1.215.306.51.612.89.857 1.215.619.825 1.22 2.341 1.363 4.177ZM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Z"/>
+                    </svg>
+                    {{.LastIP}}
+                </div>
                 {{end}}
-            {{end}}
-            {{end}}
+            </div>
+        </header>
+
+        <!-- Summary Cards -->
+        <div class="summary-grid">
+            <div class="summary-card">
+                <div class="summary-card-title">Compliance Score</div>
+                {{$total := add .PassCount .FailCount}}
+                {{if gt $total 0}}
+                    {{$score := div (mul .PassCount 100) $total}}
+                    <div class="summary-card-value {{if ge $score 90}}success{{else if ge $score 70}}{{else}}danger{{end}}">
+                        {{$score}}%
+                    </div>
+                {{else}}
+                    <div class="summary-card-value">—</div>
+                {{end}}
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-title">Passing Checks</div>
+                <div class="summary-card-value success">{{.PassCount}}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-title">Failing Checks</div>
+                <div class="summary-card-value {{if gt .FailCount 0}}danger{{end}}">{{.FailCount}}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-title">Not Applicable</div>
+                <div class="summary-card-value">{{.NACount}}</div>
+            </div>
         </div>
-        {{end}}
-        {{end}}
-        
-        {{if $result.Remediation}}
-        <details class="fix-section">
-            <summary>How to Fix</summary>
-            <ol class="fix-steps">
-            {{range $result.Remediation}}
-                <li>{{.}}</li>
-            {{end}}
-            </ol>
-        </details>
-        {{end}}
-    </div>
-    {{end}}
-    
-    {{else}}
-    <div class="overview-section">
+
+        <!-- Checks Section -->
+        {{if .CheckResults}}
+        <div class="checks-container">
+            <div class="checks-header">
+                <h2 class="checks-title">Compliance Checks</h2>
+                <div class="filter-buttons">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="fail">Failed</button>
+                    <button class="filter-btn" data-filter="pass">Passed</button>
+                </div>
+            </div>
+
+            <div class="checks-list">
+                {{range $name := .SortedChecks}}
+                {{$result := index $.CheckResults $name}}
+                {{$check := index $.Checks $name}}
+                <div class="check-item" data-status="{{$result.Status}}">
+                    <div class="check-header">
+                        <div class="check-status-icon {{$result.Status}}">
+                            {{if eq $result.Status "pass"}}
+                            <svg viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/>
+                            </svg>
+                            {{else if eq $result.Status "fail"}}
+                            <svg viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>
+                            </svg>
+                            {{else}}
+                            <svg viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/>
+                                <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/>
+                            </svg>
+                            {{end}}
+                        </div>
+                        <div class="check-info">
+                            <div class="check-name">{{$name | title}}</div>
+                            <div class="check-description">{{if $result.Reason}}{{$result.Reason}}{{else}}Check completed{{end}}</div>
+                        </div>
+                        <svg class="check-expand-icon" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>
+                        </svg>
+                    </div>
+                    <div class="check-details">
+                        {{if $check}}
+                        {{if $check.Outputs}}
+                        <div class="detail-section">
+                            <div class="detail-section-title">Technical Details</div>
+                            {{range $output := $check.Outputs}}
+                                {{if or $output.Command $output.File}}
+                                <div class="command-block">
+                                    <span class="command-prompt">$</span> 
+                                    {{if $output.Command}}{{$output.Command}}{{else}}cat {{$output.File}}{{end}}
+                                </div>
+                                {{end}}
+                                {{if $output.Stdout}}
+                                <div class="output-block">{{truncateLines $output.Stdout 30}}</div>
+                                {{end}}
+                                {{if $output.Stderr}}
+                                    {{if and (eq $output.ExitCode -2) (contains $output.Stderr "Skipped:")}}
+                                    <div class="output-block" style="color: var(--color-fg-muted); font-style: italic;">{{$output.Stderr}}</div>
+                                    {{else}}
+                                    <div class="output-block error">{{truncateLines $output.Stderr 10}}</div>
+                                    {{end}}
+                                {{end}}
+                            {{end}}
+                        </div>
+                        {{end}}
+                        {{end}}
+                        
+                        {{if and (eq $result.Status "fail") $result.Remediation}}
+                        <div class="detail-section">
+                            <div class="remediation-block">
+                                <div class="remediation-title">
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                                        <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
+                                    </svg>
+                                    How to Fix
+                                </div>
+                                <ol class="remediation-steps">
+                                {{range $step := $result.Remediation}}
+                                    <li>{{$step}}</li>
+                                {{end}}
+                                </ol>
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{else}}
         <div class="empty-state">
-            <h3>No Compliance Checks Available</h3>
-            <p>This device hasn't completed its compliance assessment yet. Check back after the device reports its status.</p>
+            <svg class="empty-state-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5 6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"/>
+            </svg>
+            <h3 class="empty-state-title">No Compliance Data Available</h3>
+            <p>This device hasn't reported any compliance checks yet. Data will appear here once the agent completes its first assessment.</p>
         </div>
+        {{end}}
     </div>
-    {{end}}
+
+    <script>
+        function toggleCheck(header) {
+            const checkItem = header.parentElement;
+            checkItem.classList.toggle('expanded');
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add click listeners to check headers
+            document.querySelectorAll('.check-header').forEach(header => {
+                header.addEventListener('click', function() {
+                    toggleCheck(this);
+                });
+            });
+
+            // Filter functionality
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    // Update active button
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // Filter checks
+                    const filter = this.dataset.filter;
+                    document.querySelectorAll('.check-item').forEach(item => {
+                        if (filter === 'all' || item.dataset.status === filter) {
+                            item.style.display = '';
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                });
+            });
+
+            // Auto-expand failed checks
+            document.querySelectorAll('.check-item[data-status="fail"]').forEach(item => {
+                // Optionally auto-expand failed checks
+                // item.classList.add('expanded');
+            });
+        });
+    </script>
 </body>
 </html>

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// getSecurePath returns a secure PATH based on the OS
+// getSecurePath returns a secure PATH based on the OS.
 func getSecurePath() string {
 	switch runtime.GOOS {
 	case "windows":

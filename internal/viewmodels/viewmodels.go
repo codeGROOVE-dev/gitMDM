@@ -8,27 +8,34 @@ import (
 	"time"
 )
 
+const (
+	excellentThreshold = 0.9
+	veryGoodThreshold  = 0.8
+	goodThreshold      = 0.7
+	fairThreshold      = 0.5
+)
+
 // DeviceListItem represents a device in the list view with compliance summary.
 type DeviceListItem struct {
+	LastSeen        time.Time
 	HardwareID      string
 	Hostname        string
 	User            string
 	OS              string
 	Version         string
-	LastSeen        time.Time
+	ComplianceEmoji string
+	ComplianceClass string
+	ComplianceScore float64
 	PassCount       int
 	FailCount       int
 	NACount         int
-	ComplianceScore float64
-	ComplianceEmoji string
-	ComplianceClass string
 }
 
 // DeviceListView represents the device list page view model with filters.
 type DeviceListView struct {
-	Devices     []DeviceListItem
 	Search      string
 	Status      string
+	Devices     []DeviceListItem
 	Page        int
 	TotalPages  int
 	Total       int
@@ -41,6 +48,7 @@ type DeviceDetail struct {
 	*gitmdm.Device
 
 	CheckResults      map[string]CheckResult
+	ComplianceMessage string
 	SortedChecks      []string
 	FailingChecks     []string
 	PassingChecks     []string
@@ -48,7 +56,6 @@ type DeviceDetail struct {
 	PassCount         int
 	FailCount         int
 	NACount           int
-	ComplianceMessage string
 }
 
 // CheckResult represents the display info for a check.
@@ -155,19 +162,20 @@ func BuildDeviceDetail(device *gitmdm.Device) *DeviceDetail {
 	} else {
 		score := float64(detail.PassCount) / float64(total)
 
-		if score == 1.0 {
+		switch {
+		case score == 1.0:
 			detail.ComplianceMessage = "Perfect compliance! Either very secure or very good at lying to auditors."
-		} else if score >= 0.9 {
+		case score >= excellentThreshold:
 			detail.ComplianceMessage = "Excellent compliance. The auditors will love you."
-		} else if score >= 0.8 {
+		case score >= veryGoodThreshold:
 			detail.ComplianceMessage = "Good compliance. A few issues, but who's counting?"
-		} else if score >= 0.7 {
+		case score >= goodThreshold:
 			detail.ComplianceMessage = "Decent compliance. Room for improvement, but not on fire."
-		} else if score >= 0.5 {
+		case score >= fairThreshold:
 			detail.ComplianceMessage = "Moderate compliance. Glass half full... of security vulnerabilities."
-		} else if score > 0 {
+		case score > 0:
 			detail.ComplianceMessage = "Poor compliance. But hey, at least something works!"
-		} else {
+		default:
 			detail.ComplianceMessage = "Critical non-compliance. This device is basically a honeypot."
 		}
 	}
@@ -178,7 +186,7 @@ func BuildDeviceDetail(device *gitmdm.Device) *DeviceDetail {
 const unknownVersion = "Unknown"
 
 // ExtractOSInfo extracts OS name and version from system_info check output.
-func ExtractOSInfo(device *gitmdm.Device) (string, string) {
+func ExtractOSInfo(device *gitmdm.Device) (osName, version string) {
 	// First try system_info check
 	if osName, osVersion := extractFromSystemInfo(device); osName != unknownVersion {
 		return osName, osVersion
@@ -189,7 +197,7 @@ func ExtractOSInfo(device *gitmdm.Device) (string, string) {
 }
 
 // extractFromSystemInfo extracts OS info from system_info check results.
-func extractFromSystemInfo(device *gitmdm.Device) (string, string) {
+func extractFromSystemInfo(device *gitmdm.Device) (osName, version string) {
 	systemInfo, exists := device.Checks["system_info"]
 	if !exists || len(systemInfo.Outputs) == 0 {
 		return unknownVersion, unknownVersion
@@ -215,7 +223,7 @@ func extractFromSystemInfo(device *gitmdm.Device) (string, string) {
 }
 
 // extractFromUnameCheck extracts basic OS info from uname check as fallback.
-func extractFromUnameCheck(device *gitmdm.Device) (string, string) {
+func extractFromUnameCheck(device *gitmdm.Device) (osName, version string) {
 	unameCheck, exists := device.Checks["uname"]
 	if !exists || len(unameCheck.Outputs) == 0 {
 		return unknownVersion, unknownVersion
@@ -226,7 +234,7 @@ func extractFromUnameCheck(device *gitmdm.Device) (string, string) {
 }
 
 // parseUnameOutput parses uname command output to extract OS name.
-func parseUnameOutput(output string) (string, string) {
+func parseUnameOutput(output string) (osName, version string) {
 	if strings.HasPrefix(output, "Darwin") {
 		return "macOS", unknownVersion
 	}
@@ -250,7 +258,7 @@ func parseUnameOutput(output string) (string, string) {
 }
 
 // parseMacOSOutput parses macOS sw_vers output.
-func parseMacOSOutput(output string) (string, string) {
+func parseMacOSOutput(output string) (osName, version string) {
 	if !strings.Contains(output, "ProductName") {
 		return unknownVersion, unknownVersion
 	}
@@ -272,26 +280,29 @@ func parseMacOSOutput(output string) (string, string) {
 }
 
 // parseLinuxOutput parses Linux /etc/os-release output.
-func parseLinuxOutput(output string) (string, string) {
+func parseLinuxOutput(output string) (osName, version string) {
 	if !strings.Contains(output, "NAME=") {
 		return unknownVersion, unknownVersion
 	}
 
-	var name, version string
+	var name, versionStr string
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, "NAME=") {
+		switch {
+		case strings.HasPrefix(line, "NAME="):
 			name = strings.Trim(strings.TrimPrefix(line, "NAME="), `"`)
-		} else if strings.HasPrefix(line, "VERSION=") {
-			version = strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
-		} else if strings.HasPrefix(line, "VERSION_ID=") && version == "" {
-			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), `"`)
+		case strings.HasPrefix(line, "VERSION="):
+			versionStr = strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
+		case strings.HasPrefix(line, "VERSION_ID=") && versionStr == "":
+			versionStr = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), `"`)
+		default:
+			// No action needed for other lines
 		}
 	}
 
 	if name != "" {
-		if version != "" {
-			return name, version
+		if versionStr != "" {
+			return name, versionStr
 		}
 		return name, unknownVersion
 	}
@@ -299,7 +310,7 @@ func parseLinuxOutput(output string) (string, string) {
 }
 
 // parseFreeBSDOutput parses FreeBSD freebsd-version output.
-func parseFreeBSDOutput(output string) (string, string) {
+func parseFreeBSDOutput(output string) (osName, version string) {
 	if !strings.Contains(output, "FreeBSD") {
 		return unknownVersion, unknownVersion
 	}
@@ -315,18 +326,18 @@ func parseFreeBSDOutput(output string) (string, string) {
 }
 
 // parseWindowsOutput parses Windows systeminfo output.
-func parseWindowsOutput(output string) (string, string) {
+func parseWindowsOutput(output string) (osName, version string) {
 	if !strings.Contains(output, "OS Name") {
 		return unknownVersion, unknownVersion
 	}
 
-	var osName, osVersion string
+	var osNameStr, osVersion string
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "OS Name:") {
 			parts := strings.Split(line, ":")
 			if len(parts) > 1 {
-				osName = strings.TrimSpace(parts[1])
+				osNameStr = strings.TrimSpace(parts[1])
 			}
 		} else if strings.Contains(line, "OS Version:") {
 			parts := strings.Split(line, ":")
@@ -336,11 +347,11 @@ func parseWindowsOutput(output string) (string, string) {
 		}
 	}
 
-	if osName != "" {
+	if osNameStr != "" {
 		if osVersion != "" {
-			return osName, osVersion
+			return osNameStr, osVersion
 		}
-		return osName, unknownVersion
+		return osNameStr, unknownVersion
 	}
 	return unknownVersion, unknownVersion
 }

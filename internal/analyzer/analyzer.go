@@ -106,23 +106,25 @@ func DetermineOverallStatus(outputs []gitmdm.CommandOutput) (status string, reas
 	}
 
 	// Determine overall status
-	if hasFailure {
+	switch {
+	case hasFailure:
 		status = "fail"
-		if len(failReasons) == 1 {
+		switch {
+		case len(failReasons) == 1:
 			reason = failReasons[0]
-		} else if len(failReasons) > 1 {
+		case len(failReasons) > 1:
 			reason = strings.Join(failReasons, "; ")
-		} else {
+		default:
 			reason = "Check failed"
 		}
 		remediation = allRemediation
-	} else if hasSuccess {
+	case hasSuccess:
 		status = "pass"
 		reason = "Check passed"
-	} else if allSkipped {
+	case allSkipped:
 		status = "n/a"
 		reason = "Check not applicable"
-	} else {
+	default:
 		status = "n/a"
 		reason = "Unable to determine status"
 	}

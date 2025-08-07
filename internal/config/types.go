@@ -88,6 +88,8 @@ func (cd *CheckDefinition) CommandsForOS(osName string) []CommandRule {
 		if len(cd.Solaris) > 0 {
 			return cd.Solaris
 		}
+	default:
+		// Unknown OS - will fall through to unix/all checks
 	}
 
 	// Check unix for Unix-like systems (all except Windows)

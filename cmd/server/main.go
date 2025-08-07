@@ -14,6 +14,7 @@ import (
 	"gitmdm/internal/gitstore"
 	"gitmdm/internal/viewmodels"
 	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -276,7 +277,12 @@ func main() {
 	mux.HandleFunc("/health", server.handleHealth)
 
 	// Serve static files
-	staticHandler := http.FileServer(http.FS(staticFiles))
+	// Use Sub to get the static directory from the embedded filesystem
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to get static filesystem: %v", err)
+	}
+	staticHandler := http.FileServer(http.FS(staticFS))
 	mux.Handle("/static/", http.StripPrefix("/static/", staticHandler))
 
 	srv := &http.Server{

@@ -135,20 +135,6 @@
             width: 300px;
             font-size: 14px;
         }
-        
-        .search-box button {
-            padding: 8px 16px;
-            background: #0066cc;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            margin-left: 8px;
-            cursor: pointer;
-        }
-        
-        .search-box button:hover {
-            background: #0052a3;
-        }
     </style>
 </head>
 <body>
@@ -199,12 +185,10 @@
         {{end}}
     </div>
     
-    <form class="search-box" method="get">
-        <input type="text" name="search" placeholder="Search by hostname or user..." value="{{.Search}}">
-        {{if .Status}}<input type="hidden" name="status" value="{{.Status}}">{{end}}
-        <button type="submit">Search</button>
+    <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search by hostname or user..." value="{{.Search}}">
         {{if .Search}}<a href="?" style="margin-left: 10px;">Clear</a>{{end}}
-    </form>
+    </div>
     
     <div class="filters">
         <a href="?" class="{{if not .Status}}active{{end}}">All</a>
@@ -259,5 +243,60 @@
         {{if .HasNext}}<a href="?page={{add .Page 1}}{{if .Search}}&search={{.Search}}{{end}}{{if .Status}}&status={{.Status}}{{end}}">Next →</a>{{end}}
     </div>
     {{end}}
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('searchInput');
+            const table = document.querySelector('table');
+            
+            if (searchInput && table) {
+                const tbody = table.querySelector('tbody');
+                const rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+                
+                searchInput.addEventListener('input', function() {
+                    const searchTerm = this.value.toLowerCase();
+                    
+                    rows.forEach(row => {
+                        const hostname = row.cells[0] ? row.cells[0].textContent.toLowerCase() : '';
+                        const user = row.cells[1] ? row.cells[1].textContent.toLowerCase() : '';
+                        
+                        if (hostname.includes(searchTerm) || user.includes(searchTerm)) {
+                            row.style.display = '';
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    });
+                    
+                    // Update visible count
+                    const visibleRows = rows.filter(row => row.style.display !== 'none');
+                    updateEmptyState(visibleRows.length === 0, searchTerm !== '');
+                });
+                
+                // Function to show/hide empty state
+                function updateEmptyState(isEmpty, hasSearch) {
+                    let emptyState = document.querySelector('.empty');
+                    
+                    if (isEmpty) {
+                        if (!emptyState) {
+                            emptyState = document.createElement('div');
+                            emptyState.className = 'empty';
+                            emptyState.innerHTML = '<p>No devices found.</p>' + 
+                                (hasSearch ? '<p>Try adjusting your search terms.</p>' : '');
+                            table.parentNode.insertBefore(emptyState, table.nextSibling);
+                        } else {
+                            emptyState.innerHTML = '<p>No devices found.</p>' + 
+                                (hasSearch ? '<p>Try adjusting your search terms.</p>' : '');
+                        }
+                        table.style.display = 'none';
+                    } else {
+                        if (emptyState) {
+                            emptyState.style.display = 'none';
+                        }
+                        table.style.display = '';
+                    }
+                }
+            }
+        });
+    </script>
 </body>
 </html>

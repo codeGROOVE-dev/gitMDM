@@ -289,7 +289,11 @@
             <div class="output">{{truncateLines $output.Stdout 30}}</div>
             {{end}}
             {{if $output.Stderr}}
-            <div class="output error">{{truncateLines $output.Stderr 10}}</div>
+                {{if and (eq $output.ExitCode -2) (contains $output.Stderr "Skipped:")}}
+                <div class="output" style="color: #666; font-style: italic;">{{$output.Stderr}}</div>
+                {{else}}
+                <div class="output error">{{truncateLines $output.Stderr 10}}</div>
+                {{end}}
             {{end}}
             {{end}}
         </div>

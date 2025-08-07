@@ -14,12 +14,19 @@ checks:
   disk_encryption:
     description: "Verify disk encryption is enabled"
     linux:
-      - output: lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,TYPE,UUID,ENCRYPTED
-        excludes: "ENCRYPTED.*1|luks"
+      - file: /etc/crypttab
+        excludes: luks
         remediation:
           - Enable full disk encryption using LUKS
           - Run 'sudo cryptsetup luksFormat /dev/sdX' for each unencrypted partition
           - Update /etc/crypttab and /etc/fstab accordingly
+      - output: lsblk -a
+        excludes: luks|LUKS|crypt
+        remediation:
+          - Enable full disk encryption using LUKS
+          - Run 'sudo cryptsetup luksFormat /dev/sdX' for each unencrypted partition
+          - Update /etc/crypttab and /etc/fstab accordingly
+
     darwin:
       - output: fdesetup status
         includes: "FileVault is Off|Encryption Not Enabled"
@@ -552,17 +559,6 @@ checks:
         remediation:
           - macOS includes built-in XProtect antivirus
           - Ensure system updates are enabled to keep XProtect updated
-    linux:
-      - output: systemctl status clamav-daemon
-        includes: "inactive|not found"
-        remediation:
-          - Install ClamAV with 'sudo apt install clamav clamav-daemon'
-          - Start service with 'sudo systemctl enable --now clamav-daemon'
-      - output: which rkhunter
-        exitcode: 1
-        remediation:
-          - Install rkhunter for rootkit detection
-          - Configure regular scans with cron
     windows:
       - output: sc query WinDefend
         includes: "STOPPED"

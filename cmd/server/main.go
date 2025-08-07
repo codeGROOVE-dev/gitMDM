@@ -408,7 +408,7 @@ func (s *Server) updateComplianceCacheLocked(device *gitmdm.Device) {
 		// Device hasn't checked in yet - use all data from git
 		staleThreshold = time.Time{} // Zero time means no filtering
 	}
-	
+
 	for _, check := range device.Checks {
 		// Skip stale checks only if we have a threshold and the check has a timestamp
 		if !staleThreshold.IsZero() && !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
@@ -648,7 +648,7 @@ func (s *Server) handleDevice(writer http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	device, exists := s.devices[hardwareID]
-	cache, _ := s.complianceCache[hardwareID]
+	cache := s.complianceCache[hardwareID]
 	s.mu.RUnlock()
 
 	if !exists {

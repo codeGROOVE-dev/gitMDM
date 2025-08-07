@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"gitmdm/internal/analyzer"
+	"gitmdm/internal/config"
+	"gitmdm/internal/gitmdm"
 	"io"
 	"log"
 	"net/http"
@@ -22,10 +25,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"gitmdm/internal/analyzer"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
 
@@ -156,7 +155,8 @@ func main() {
 
 		if err := agent.sendReport(ctx, report); err != nil {
 			cancel()
-			log.Fatalf("Failed to verify server connection: %v\nPlease check your --server and --join parameters", err) //nolint:gocritic // exitAfterDefer
+			//nolint:gocritic,lll // exitAfterDefer
+			log.Fatalf("Failed to verify server connection: %v\nPlease check your --server and --join parameters", err)
 		}
 
 		log.Println("✓ Server connection verified successfully")

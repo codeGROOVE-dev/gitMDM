@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,7 +29,7 @@ type AgentConfig struct {
 // os.UserConfigDir() returns:
 // - macOS: ~/Library/Application Support
 // - Linux/BSD: $XDG_CONFIG_HOME or ~/.config
-// - Windows: %AppData%
+// - Windows: %AppData%.
 func configDir() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -58,6 +59,40 @@ func loadConfig() (*AgentConfig, error) {
 	return &config, nil
 }
 
+// installExecutable copies the executable to the target path, handling busy files.
+func installExecutable(exePath, targetPath string) error {
+	// Stop any existing instance (but not ourselves)
+	// Note: We accept the TOCTOU risk here as it's a best-effort cleanup
+	if _, err := os.Stat(targetPath); err == nil {
+		// Use exec.Command directly to avoid shell injection
+		// The targetPath is safe (constructed from constants) but better to be explicit
+		cmd := exec.Command("pkill", "-f", targetPath) //nolint:noctx // killing existing process doesn't need context
+		_ = cmd.Run()                                  //nolint:errcheck // Best effort
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Try direct copy first
+	if err := copyFile(exePath, targetPath); err != nil {
+		// Handle "text file busy" error by copying to temp and renaming
+		if !strings.Contains(strings.ToLower(err.Error()), "text file busy") {
+			return fmt.Errorf("failed to copy executable: %w", err)
+		}
+
+		// Copy to temp file and rename
+		tempPath := targetPath + ".new"
+		if err := copyFile(exePath, tempPath); err != nil {
+			return fmt.Errorf("failed to copy executable to temp file: %w", err)
+		}
+		if err := os.Rename(tempPath, targetPath); err != nil {
+			_ = os.Remove(targetPath) //nolint:errcheck // Try removing old file
+			if err := os.Rename(tempPath, targetPath); err != nil {
+				return fmt.Errorf("failed to replace executable: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // installAgent installs the agent to run automatically at system startup.
 func installAgent(serverURL, joinKey string) error {
 	// Get home directory
@@ -68,7 +103,7 @@ func installAgent(serverURL, joinKey string) error {
 
 	// Create installation directory
 	targetDir := filepath.Join(homeDir, installDir)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil { //nolint:gosec // standard directory permissions for program dir
 		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
 	}
 
@@ -86,39 +121,13 @@ func installAgent(serverURL, joinKey string) error {
 		fmt.Printf("Agent is already installed at %s\n", targetPath)
 		// Just need to ensure autostart is configured
 	} else {
-		// Stop any existing instance (but not ourselves)
-		// Note: We accept the TOCTOU risk here as it's a best-effort cleanup
-		if _, err := os.Stat(targetPath); err == nil {
-			// Use exec.Command directly to avoid shell injection
-			// The targetPath is safe (constructed from constants) but better to be explicit
-			cmd := exec.Command("pkill", "-f", targetPath) //nolint:noctx
-			_ = cmd.Run() //nolint:errcheck // Best effort
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		// Try direct copy first
-		if err := copyFile(exePath, targetPath); err != nil {
-			// Handle "text file busy" error by copying to temp and renaming
-			if !strings.Contains(strings.ToLower(err.Error()), "text file busy") {
-				return fmt.Errorf("failed to copy executable: %w", err)
-			}
-			
-			// Copy to temp file and rename
-			tempPath := targetPath + ".new"
-			if err := copyFile(exePath, tempPath); err != nil {
-				return fmt.Errorf("failed to copy executable to temp file: %w", err)
-			}
-			if err := os.Rename(tempPath, targetPath); err != nil {
-				_ = os.Remove(targetPath) //nolint:errcheck // Try removing old file
-				if err := os.Rename(tempPath, targetPath); err != nil {
-					return fmt.Errorf("failed to replace executable: %w", err)
-				}
-			}
+		if err := installExecutable(exePath, targetPath); err != nil {
+			return err
 		}
 	}
 
 	// Make executable
-	if err := os.Chmod(targetPath, 0o755); err != nil {
+	if err := os.Chmod(targetPath, 0o755); err != nil { //nolint:gosec // executable needs execute permission
 		return fmt.Errorf("failed to set executable permissions: %w", err)
 	}
 
@@ -205,7 +214,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o755)
+	return os.WriteFile(dst, data, 0o755) //nolint:gosec // executable needs execute permission
 }
 
 // isSystemdUserAvailable checks if systemd user services are available and working.
@@ -243,7 +252,7 @@ func installMacOS(agentPath, serverURL, joinKey string) error {
 
 	// Create LaunchAgents directory if it doesn't exist
 	launchAgentsDir := filepath.Join(homeDir, "Library", "LaunchAgents")
-	if err := os.MkdirAll(launchAgentsDir, 0o755); err != nil {
+	if err := os.MkdirAll(launchAgentsDir, 0o755); err != nil { //nolint:gosec // standard permissions for LaunchAgents
 		return fmt.Errorf("failed to create LaunchAgents directory: %w", err)
 	}
 
@@ -298,13 +307,12 @@ func installMacOS(agentPath, serverURL, joinKey string) error {
 
 	// Load the launch agent
 	cmd := exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	if _, err := cmd.CombinedOutput(); err != nil {
 		// Try to unload first in case it's already loaded
 		_ = exec.Command("launchctl", "unload", plistPath).Run() //nolint:errcheck,noctx // Best effort
 		// Try loading again
 		cmd = exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
-		if output, err = cmd.CombinedOutput(); err != nil {
+		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to load launch agent: %w\nOutput: %s", err, output)
 		}
 	}
@@ -347,7 +355,7 @@ func installLinux(agentPath, serverURL, joinKey string) error {
 	}
 
 	serviceDir := filepath.Join(homeDir, ".config", "systemd", "user")
-	if err := os.MkdirAll(serviceDir, 0o755); err != nil {
+	if err := os.MkdirAll(serviceDir, 0o755); err != nil { //nolint:gosec // standard permissions for systemd services
 		return fmt.Errorf("failed to create systemd directory: %w", err)
 	}
 
@@ -447,7 +455,7 @@ func uninstallLinux() error {
 func installCron(agentPath, _, _ string) error {
 	// Check if crontab is available
 	if _, err := exec.LookPath("crontab"); err != nil {
-		return fmt.Errorf("neither systemd user services nor cron are available - manual startup required")
+		return errors.New("neither systemd user services nor cron are available - manual startup required")
 	}
 
 	// Get current crontab
@@ -478,13 +486,13 @@ func installCron(agentPath, _, _ string) error {
 	// Try to start the agent immediately in background
 	// Security note: agentPath is constructed from filepath.Join with constants,
 	// but we use exec.Command directly to avoid shell injection risks
-	cmd = exec.Command(agentPath) //nolint:noctx
+	cmd = exec.Command(agentPath) //nolint:noctx // agent spawns its own context
 	cmd.Stdin = nil
-	cmd.Stdout = nil 
+	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err == nil {
 		// Detach from the process
-		_ = cmd.Process.Release() //nolint:errcheck
+		_ = cmd.Process.Release() //nolint:errcheck // best effort cleanup
 	}
 
 	return nil
@@ -530,6 +538,8 @@ func uninstallCron() error {
 }
 
 // installWindows installs Windows Task Scheduler task.
+//
+//nolint:unused // Windows-specific function needed for cross-platform support
 func installWindows(agentPath, _, _ string) error {
 	// Create the task XML content
 	taskXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
@@ -583,39 +593,42 @@ func installWindows(agentPath, _, _ string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer os.Remove(tempFile.Name()) //nolint:errcheck
+	defer os.Remove(tempFile.Name()) //nolint:errcheck // best effort cleanup
 
 	if _, err := tempFile.WriteString(taskXML); err != nil {
 		return fmt.Errorf("failed to write task XML: %w", err)
 	}
-	tempFile.Close() //nolint:errcheck
+	_ = tempFile.Close() //nolint:errcheck // file already written
 
 	// Delete existing task if present (ignore errors)
-	cmd := exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx
-	_ = cmd.Run() //nolint:errcheck
+	cmd := exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx // Windows task management doesn't need context
+	_ = cmd.Run()                                                           //nolint:errcheck // best effort cleanup
 
 	// Create the scheduled task
-	cmd = exec.Command("schtasks", "/Create", "/TN", "GitMDM Agent", "/XML", tempFile.Name()) //nolint:noctx
+	//nolint:noctx,gosec,lll // Windows task management doesn't need context, XML file is trusted
+	cmd = exec.Command("schtasks", "/Create", "/TN", "GitMDM Agent", "/XML", tempFile.Name())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create scheduled task: %w\nOutput: %s", err, output)
 	}
 
 	// Start the task immediately
-	cmd = exec.Command("schtasks", "/Run", "/TN", "GitMDM Agent") //nolint:noctx
-	_ = cmd.Run() //nolint:errcheck // Best effort
+	cmd = exec.Command("schtasks", "/Run", "/TN", "GitMDM Agent") //nolint:noctx // Windows task management doesn't need context
+	_ = cmd.Run()                                                 //nolint:errcheck // Best effort
 
 	return nil
 }
 
 // uninstallWindows removes Windows Task Scheduler task.
+//
+//nolint:unused // Windows-specific function needed for cross-platform support
 func uninstallWindows() error {
 	// Stop the task
-	cmd := exec.Command("schtasks", "/End", "/TN", "GitMDM Agent") //nolint:noctx
-	_ = cmd.Run() //nolint:errcheck // Best effort
+	cmd := exec.Command("schtasks", "/End", "/TN", "GitMDM Agent") //nolint:noctx // Windows task management doesn't need context
+	_ = cmd.Run()                                                  //nolint:errcheck // Best effort
 
 	// Delete the task
-	cmd = exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx
+	cmd = exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx // Windows task management doesn't need context
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if !strings.Contains(string(output), "The system cannot find") {
@@ -625,8 +638,8 @@ func uninstallWindows() error {
 	}
 
 	// Try to stop any running agent process
-	cmd = exec.Command("taskkill", "/F", "/IM", "gitmdm-agent.exe") //nolint:noctx
-	_ = cmd.Run() //nolint:errcheck // Best effort
+	cmd = exec.Command("taskkill", "/F", "/IM", "gitmdm-agent.exe") //nolint:noctx // Windows process management doesn't need context
+	_ = cmd.Run()                                                   //nolint:errcheck // Best effort
 
 	return nil
 }

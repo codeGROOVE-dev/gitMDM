@@ -45,23 +45,27 @@ make all
 Run a server:
 
 ```bash
-./gitmdm-server -git /opt/compliance
+gitmdm-server -git /var/git
 ```
 
 If you are a fan of Google Cloud Run, check out `./hacks/deploy.sh` for a deployment script.
 
-On a client:
+On a client, the --install flag establishes persistence:
 
 ```bash
-$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
+$ gitmdm-agent --install --server https://gitmdm.cloud --join XXXX
 ```
 
-## What kind of checks do we do?
+## What compliance items does gitMDM check for?
 
-* Full Disk Encryption
-* Screen locks
-* OS updates
+Only the things that come up in a SOC-2 or ISO 27001 report:
+
+* Antivirus
 * Firewall
+* Full Disk Encryption
+* OS updates
+* Password complexity (respecting NIST 800-36B)
+* Screen locks
 
 ## What kind of bizarre platforms do you support?
 
@@ -74,6 +78,13 @@ $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 - macOS (10.15+)
 - Windows 11/10 (though we've never tried it)
 ```
+
+## Installation That Respects Your OS
+
+- **Linux**: systemd user service (falls back to cron)
+- **(Dragonfly|Net|Free|Open)BSD**: cron
+- **macOS**: launchd
+- **Windows**: Task Scheduler
 
 We detect 11+ desktop environments because your team refuses to standardize.
 
@@ -91,7 +102,7 @@ We detect 11+ desktop environments because your team refuses to standardize.
 
 The server literally cannot execute commands. We removed the code. It's not there.
 
-## For Your Compliance Team
+## FAQ
 
 > "What happens if someone compromises the server?"
 
@@ -104,13 +115,6 @@ They can. It's their machine. They can also lie on spreadsheets. At least this h
 > "Is this enterprise-ready?"
 
 No. But neither was Stripe when you started using it.
-
-## Installation That Respects Your OS
-
-- **Linux**: systemd user service (falls back to cron if you're systemd-free)
-- **(Dragonfly|Net|Free|Open)BSD**: cron (because rc.d requires root and we're not animals)
-- **macOS**: launchd (the least worst option)
-- **Windows**: Task Scheduler (runs as user, not SYSTEM)
 
 ---
 

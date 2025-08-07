@@ -1017,10 +1017,17 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 		// Show evidence - command and output for failed checks
 		if len(result.Outputs) > 0 {
 			printLine("   💻 Evidence:")
-			for _, output := range result.Outputs {
+			failedCount := 0
+			for i, output := range result.Outputs {
 				// Skip outputs that didn't fail
 				if !output.Failed {
 					continue
+				}
+				failedCount++
+
+				// If multiple commands were checked, number them
+				if len(result.Outputs) > 1 {
+					printLine("      [Command %d of %d - FAILED]", i+1, len(result.Outputs))
 				}
 
 				// Show command or file that was checked
@@ -1028,6 +1035,10 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 					printLine("      Command: %s", output.Command)
 				} else if output.File != "" {
 					printLine("      File: %s", output.File)
+				}
+				// Show why it failed
+				if output.FailReason != "" {
+					printLine("      Failure: %s", output.FailReason)
 				}
 
 				// Show relevant output (truncated for readability)
@@ -1044,6 +1055,16 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 
 				if output.Stderr != "" && output.Stderr != output.FailReason {
 					printLine("      Error: %s", output.Stderr)
+				}
+				
+				// Add spacing between multiple failed commands
+				if failedCount < len(result.Outputs) && len(result.Outputs) > 1 {
+					for j := i + 1; j < len(result.Outputs); j++ {
+						if result.Outputs[j].Failed {
+							printLine("")
+							break
+						}
+					}
 				}
 			}
 		}
@@ -1098,7 +1119,18 @@ func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []stri
 		printLine("───────────────────────────────────────────────────────────────")
 
 		// Show all command outputs
-		for _, output := range result.Outputs {
+		for i, output := range result.Outputs {
+			// Show command number if multiple
+			if len(result.Outputs) > 1 {
+				status := "OK"
+				if output.Failed {
+					status = "FAILED"
+				} else if output.Skipped || output.FileMissing {
+					status = "SKIPPED"
+				}
+				printLine("[Command %d of %d - %s]", i+1, len(result.Outputs), status)
+			}
+			
 			if output.Command != "" {
 				printLine("Command: %s", output.Command)
 			} else if output.File != "" {
@@ -1137,9 +1169,12 @@ func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []stri
 				}
 			}
 
-			if output.Failed {
+			switch {
+			case output.Failed:
 				printLine("Status: FAILED - %s", output.FailReason)
-			} else {
+			case output.Skipped, output.FileMissing:
+				printLine("Status: SKIPPED")
+			default:
 				printLine("Status: OK")
 			}
 			printLine("")

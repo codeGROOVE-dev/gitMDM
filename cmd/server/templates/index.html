@@ -1,357 +1,263 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Security Compliance Dashboard</title>
+    <title>Compliance Dashboard</title>
     <style>
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            font-size: 16px; 
-            line-height: 1.6;
-            margin: 0;
-            padding: 40px; 
-            color: #2c3e50;
-            background: #f8f9fa;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        .header {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            font-size: 15px; 
+            line-height: 1.5;
+            margin: 20px;
+            padding: 0; 
+            color: #000;
             background: white;
-            padding: 32px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 32px;
+            max-width: 1000px;
         }
         
         h1 { 
-            font-size: 36px; 
-            font-weight: 700;
-            margin: 0 0 12px 0; 
-            color: #2c3e50;
+            font-size: 24px; 
+            font-weight: 600;
+            margin: 0 0 20px 0; 
+            color: #000;
         }
         
-        .description {
-            color: #6c757d;
-            font-size: 18px;
-            margin-bottom: 16px;
-            line-height: 1.5;
+        .stats {
+            margin: 20px 0;
+            padding: 15px 0;
+            border-bottom: 1px solid #ddd;
+            color: #666;
         }
         
-        .summary {
-            display: flex;
-            gap: 24px;
-            margin-top: 20px;
-        }
-        
-        .stat-card {
-            background: #f8f9fa;
-            padding: 16px 20px;
-            border-radius: 8px;
-            border-left: 4px solid #dee2e6;
-        }
-        
-        .stat-number {
-            font-size: 24px;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        
-        .stat-label {
-            font-size: 14px;
-            color: #6c757d;
-            margin-top: 4px;
-        }
-        
-        .pagination {
-            background: white;
-            padding: 20px 32px;
-            border-radius: 12px;
-            margin-bottom: 32px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        
-        .pagination-text {
-            color: #6c757d;
-            font-size: 16px;
-            margin-bottom: 12px;
-        }
-        
-        .pagination-links a {
-            background: #007bff;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 500;
-            margin-right: 12px;
+        .stat {
             display: inline-block;
+            margin-right: 30px;
         }
         
-        .pagination-links a:hover {
-            background: #0056b3;
-        }
-        
-        .devices-container {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        
-        .devices-header {
-            background: #f8f9fa;
-            padding: 24px 32px;
-            border-bottom: 2px solid #e9ecef;
-        }
-        
-        .devices-title {
-            font-size: 24px;
+        .stat-value {
             font-weight: 600;
-            color: #2c3e50;
-            margin: 0 0 8px 0;
+            color: #000;
         }
         
-        .devices-subtitle {
-            color: #6c757d;
-            font-size: 16px;
+        .filters {
+            margin: 20px 0;
         }
         
-        .device-list {
-            padding: 0;
-        }
-        
-        .device-item {
-            padding: 32px;
-            border-bottom: 1px solid #f1f3f4;
-            transition: background-color 0.2s ease;
-        }
-        
-        .device-item:hover {
-            background: #f8f9fa;
-        }
-        
-        .device-item:last-child {
-            border-bottom: none;
-        }
-        
-        .device-main {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 16px;
-        }
-        
-        .device-info h3 {
-            font-size: 22px;
-            font-weight: 600;
-            margin: 0 0 8px 0;
-        }
-        
-        .device-info a {
-            color: #007bff;
+        .filters a {
+            color: #0066cc;
             text-decoration: none;
+            margin-right: 15px;
         }
         
-        .device-info a:hover {
+        .filters a:hover {
             text-decoration: underline;
         }
         
-        .device-meta {
-            color: #6c757d;
-            font-size: 16px;
-            margin-bottom: 4px;
-        }
-        
-        .compliance-badge {
-            text-align: right;
-        }
-        
-        .compliance-score {
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 4px;
-            display: block;
-        }
-        
-        .compliance-label {
-            font-size: 14px;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .filters .active {
             font-weight: 600;
+            color: #000;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th {
+            text-align: left;
+            padding: 10px 5px;
+            border-bottom: 2px solid #000;
+            font-weight: 600;
+        }
+        
+        td {
+            padding: 10px 5px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        tr:hover {
+            background: #f9f9f9;
+        }
+        
+        a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            text-decoration: underline;
         }
         
         .status-excellent {
-            color: #28a745;
+            color: #0A7C0A;
+            font-weight: 600;
         }
         
         .status-good {
-            color: #ffc107;
+            color: #0066CC;
+            font-weight: 600;
         }
         
-        .status-needs-attention {
-            color: #dc3545;
+        .status-poor {
+            color: #CC0000;
+            font-weight: 600;
         }
         
         .status-checking {
-            color: #6c757d;
+            color: #999;
         }
         
-        .device-details {
-            display: flex;
-            gap: 32px;
-            color: #6c757d;
+        .pagination {
+            margin: 30px 0;
+            padding: 15px 0;
+            border-top: 1px solid #ddd;
+            color: #666;
+        }
+        
+        .pagination a {
+            margin: 0 10px;
+        }
+        
+        .empty {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+        }
+        
+        .search-box {
+            margin: 20px 0;
+        }
+        
+        .search-box input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 300px;
             font-size: 14px;
         }
         
-        .detail-item {
-            display: flex;
-            flex-direction: column;
+        .search-box button {
+            padding: 8px 16px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-left: 8px;
+            cursor: pointer;
         }
         
-        .detail-label {
-            font-weight: 600;
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-size: 12px;
-        }
-        
-        .detail-value {
-            font-size: 16px;
-            color: #2c3e50;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 80px 32px;
-            color: #6c757d;
-        }
-        
-        .empty-state h3 {
-            font-size: 24px;
-            margin-bottom: 12px;
-        }
-        
-        .empty-state p {
-            font-size: 16px;
+        .search-box button:hover {
+            background: #0052a3;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Security Compliance Dashboard</h1>
-        <p class="description">
-            This dashboard shows the security compliance status of all monitored devices. 
-            Each device is regularly checked against security policies and the compliance percentage indicates how many security requirements are currently met.
-        </p>
-        <div class="summary">
-            <div class="stat-card">
-                <div class="stat-number">{{len .Devices}}</div>
-                <div class="stat-label">Device{{if ne (len .Devices) 1}}s{{end}} Monitored</div>
-            </div>
-            {{if .Devices}}
-            {{$totalDevices := len .Devices}}
-            {{$excellentCount := 0}}
-            {{$goodCount := 0}}
-            {{$needsAttentionCount := 0}}
-            {{range .Devices}}
-                {{if .ComplianceScore}}
-                    {{if ge .ComplianceScore 0.9}}
-                        {{$excellentCount = add $excellentCount 1}}
-                    {{else if ge .ComplianceScore 0.7}}
-                        {{$goodCount = add $goodCount 1}}
-                    {{else}}
-                        {{$needsAttentionCount = add $needsAttentionCount 1}}
-                    {{end}}
+    <h1>Compliance Dashboard</h1>
+    
+    <div class="stats">
+        <span class="stat">
+            Total: <span class="stat-value">{{.Total}}</span>
+        </span>
+        {{if .Devices}}
+        {{$excellentCount := 0}}
+        {{$goodCount := 0}}
+        {{$poorCount := 0}}
+        {{$checkingCount := 0}}
+        {{range .Devices}}
+            {{if .ComplianceScore}}
+                {{if ge .ComplianceScore 0.9}}
+                    {{$excellentCount = add $excellentCount 1}}
+                {{else if ge .ComplianceScore 0.7}}
+                    {{$goodCount = add $goodCount 1}}
                 {{else}}
-                    {{$needsAttentionCount = add $needsAttentionCount 1}}
+                    {{$poorCount = add $poorCount 1}}
                 {{end}}
+            {{else}}
+                {{$checkingCount = add $checkingCount 1}}
             {{end}}
-            <div class="stat-card">
-                <div class="stat-number status-excellent">{{$excellentCount}}</div>
-                <div class="stat-label">Excellent (90%+)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number status-good">{{$goodCount}}</div>
-                <div class="stat-label">Good (70-89%)</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number status-needs-attention">{{$needsAttentionCount}}</div>
-                <div class="stat-label">Needs Attention</div>
-            </div>
-            {{end}}
-        </div>
+        {{end}}
+        {{if gt $excellentCount 0}}
+        <span class="stat">
+            Excellent: <span class="stat-value status-excellent">{{$excellentCount}}</span>
+        </span>
+        {{end}}
+        {{if gt $goodCount 0}}
+        <span class="stat">
+            Good: <span class="stat-value status-good">{{$goodCount}}</span>
+        </span>
+        {{end}}
+        {{if gt $poorCount 0}}
+        <span class="stat">
+            Issues: <span class="stat-value status-poor">{{$poorCount}}</span>
+        </span>
+        {{end}}
+        {{if gt $checkingCount 0}}
+        <span class="stat">
+            Pending: <span class="stat-value status-checking">{{$checkingCount}}</span>
+        </span>
+        {{end}}
+        {{end}}
     </div>
     
-    {{if gt .TotalPages 1}}
-    <div class="pagination">
-        <div class="pagination-text">
-            Showing page {{.Page}} of {{.TotalPages}} — {{.Total}} total devices
-        </div>
-        <div class="pagination-links">
-            {{if .HasPrevious}}<a href="?page={{sub .Page 1}}">← Previous Page</a>{{end}}
-            {{if .HasNext}}<a href="?page={{add .Page 1}}">Next Page →</a>{{end}}
-        </div>
+    <form class="search-box" method="get">
+        <input type="text" name="search" placeholder="Search by hostname or user..." value="{{.Search}}">
+        {{if .Status}}<input type="hidden" name="status" value="{{.Status}}">{{end}}
+        <button type="submit">Search</button>
+        {{if .Search}}<a href="?" style="margin-left: 10px;">Clear</a>{{end}}
+    </form>
+    
+    <div class="filters">
+        <a href="?" class="{{if not .Status}}active{{end}}">All</a>
+        <a href="?status=excellent" class="{{if eq .Status "excellent"}}active{{end}}">Excellent</a>
+        <a href="?status=good" class="{{if eq .Status "good"}}active{{end}}">Good</a>
+        <a href="?status=issues" class="{{if eq .Status "issues"}}active{{end}}">Has Issues</a>
+        <a href="?status=checking" class="{{if eq .Status "checking"}}active{{end}}">Checking</a>
+    </div>
+    
+    {{if .Devices}}
+    <table>
+        <thead>
+            <tr>
+                <th>Hostname</th>
+                <th>User</th>
+                <th>OS</th>
+                <th>Compliance</th>
+                <th>Last Update</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Devices}}
+            <tr>
+                <td><a href="/device/{{.HardwareID}}">{{.Hostname}}</a></td>
+                <td>{{.User}}</td>
+                <td>{{.OS}} {{.Version}}</td>
+                <td>
+                    {{if .ComplianceScore}}
+                        <span class="{{if ge .ComplianceScore 0.9}}status-excellent{{else if ge .ComplianceScore 0.7}}status-good{{else}}status-poor{{end}}">
+                            {{printf "%.0f" (mulf .ComplianceScore 100.0)}}%
+                        </span>
+                    {{else}}
+                        <span class="status-checking">—</span>
+                    {{end}}
+                </td>
+                <td>{{.LastSeen | formatAgo}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <div class="empty">
+        <p>No devices found.</p>
+        {{if .Search}}<p>Try adjusting your search terms.</p>{{end}}
     </div>
     {{end}}
     
-    <div class="devices-container">
-        <div class="devices-header">
-            <h2 class="devices-title">Device Details</h2>
-            <p class="devices-subtitle">Click on any device name to view detailed security check results</p>
-        </div>
-        
-        <div class="device-list">
-            {{range .Devices}}
-            <div class="device-item">
-                <div class="device-main">
-                    <div class="device-info">
-                        <h3><a href="/device/{{.HardwareID}}">{{.Hostname}}</a></h3>
-                        <div class="device-meta">Primary User: {{.User}}</div>
-                        <div class="device-meta">Operating System: {{.OS}} {{.Version}}</div>
-                    </div>
-                    <div class="compliance-badge">
-                        <span class="compliance-score {{if .ComplianceScore}}{{if ge .ComplianceScore 0.9}}status-excellent{{else if ge .ComplianceScore 0.7}}status-good{{else}}status-needs-attention{{end}}{{else}}status-checking{{end}}">
-                            {{if .ComplianceScore}}{{printf "%.0f" (mulf .ComplianceScore 100.0)}}%{{else}}—{{end}}
-                        </span>
-                        <div class="compliance-label">
-                            {{if .ComplianceScore}}
-                                {{if ge .ComplianceScore 0.9}}Excellent{{else if ge .ComplianceScore 0.7}}Good{{else}}Needs Attention{{end}}
-                            {{else}}
-                                Checking...
-                            {{end}}
-                        </div>
-                    </div>
-                </div>
-                <div class="device-details">
-                    <div class="detail-item">
-                        <div class="detail-label">Last Check-in</div>
-                        <div class="detail-value">{{.LastSeen | formatAgo}}</div>
-                    </div>
-                    {{if .ComplianceScore}}
-                    <div class="detail-item">
-                        <div class="detail-label">Security Status</div>
-                        <div class="detail-value">
-                            {{if ge .ComplianceScore 0.9}}
-                                All security requirements met
-                            {{else if ge .ComplianceScore 0.7}}
-                                Most security requirements met
-                            {{else}}
-                                Multiple security issues found
-                            {{end}}
-                        </div>
-                    </div>
-                    {{end}}
-                </div>
-            </div>
-            {{else}}
-            <div class="empty-state">
-                <h3>No Devices Found</h3>
-                <p>Devices will appear here once they begin reporting their security status.</p>
-            </div>
-            {{end}}
-        </div>
+    {{if gt .TotalPages 1}}
+    <div class="pagination">
+        Page {{.Page}} of {{.TotalPages}}
+        {{if .HasPrevious}}<a href="?page={{sub .Page 1}}{{if .Search}}&search={{.Search}}{{end}}{{if .Status}}&status={{.Status}}{{end}}">← Previous</a>{{end}}
+        {{if .HasNext}}<a href="?page={{add .Page 1}}{{if .Search}}&search={{.Search}}{{end}}{{if .Status}}&status={{.Status}}{{end}}">Next →</a>{{end}}
     </div>
+    {{end}}
 </body>
 </html>

@@ -1,33 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Security Report: {{.Hostname}}</title>
+    <title>Compliance Report: {{.Hostname}}</title>
     <style>
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            font-size: 16px; 
-            line-height: 1.6;
-            margin: 0;
-            padding: 40px; 
-            color: #2c3e50;
-            background: #f8f9fa;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        .header {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            font-size: 15px; 
+            line-height: 1.5;
+            margin: 20px;
+            padding: 0; 
+            color: #000;
             background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            margin-bottom: 32px;
+            max-width: 1000px;
         }
         
         .nav-back {
-            color: #007bff;
+            color: #0066cc;
             text-decoration: none;
-            font-size: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             display: inline-block;
         }
         
@@ -36,36 +26,38 @@
         }
         
         h1 { 
-            font-size: 36px; 
-            font-weight: 700;
-            margin: 0 0 16px 0; 
-            color: #2c3e50;
+            font-size: 24px; 
+            font-weight: 600;
+            margin: 0 0 20px 0; 
+            color: #000;
+        }
+        
+        h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 30px 0 15px 0;
+            color: #000;
         }
         
         .device-summary {
-            background: white;
-            padding: 16px 0;
             margin: 20px 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            padding: 15px 0;
+            border-bottom: 1px solid #ddd;
+            color: #666;
         }
         
         .summary-line {
-            margin: 6px 0;
-            font-size: 15px;
-            line-height: 1.5;
-            color: #333;
+            display: inline-block;
+            margin-right: 30px;
         }
         
         .summary-label {
-            color: #666;
-            font-weight: 500;
-            display: inline-block;
-            min-width: 100px;
+            font-weight: 600;
+            color: #000;
         }
         
         .summary-value {
-            color: #000;
-            font-weight: 400;
+            color: #666;
         }
         
         .summary-value.status-excellent {
@@ -83,241 +75,117 @@
             font-weight: 600;
         }
         
-        .summary-value.status-checking {
+        .checks-summary {
+            margin: 20px 0;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th {
+            text-align: left;
+            padding: 10px 5px;
+            border-bottom: 2px solid #000;
+            font-weight: 600;
+        }
+        
+        td {
+            padding: 10px 5px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+        
+        tr:hover {
+            background: #f9f9f9;
+        }
+        
+        .status-pass {
+            color: #0A7C0A;
+            font-weight: 600;
+        }
+        
+        .status-fail {
+            color: #CC0000;
+            font-weight: 600;
+        }
+        
+        .status-na {
             color: #999;
         }
         
-        .status-excellent {
-            color: #28a745;
-        }
-        
-        .status-good {
-            color: #ffc107;
-        }
-        
-        .status-needs-attention {
-            color: #dc3545;
-        }
-        
-        .status-checking {
-            color: #6c757d;
-        }
-        
-        .overview-section {
-            background: white;
-            padding: 32px;
-            border-radius: 12px;
-            margin: 32px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        
-        .section-title {
-            font-size: 24px;
-            font-weight: 600;
-            margin: 0 0 16px 0;
-            color: #2c3e50;
-        }
-        
-        .section-description {
-            color: #6c757d;
-            font-size: 16px;
-            margin-bottom: 24px;
-            line-height: 1.5;
-        }
-        
-        .checks-summary {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 24px;
-            margin: 24px 0;
-        }
-        
-        .check-category {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #dee2e6;
-        }
-        
-        .check-category.failing {
-            border-left-color: #dc3545;
-            background: #f8d7da;
-        }
-        
-        .check-category.passing {
-            border-left-color: #28a745;
-            background: #d4edda;
-        }
-        
-        .check-category.not-applicable {
-            border-left-color: #6c757d;
-            background: #e2e3e5;
-        }
-        
-        .category-title {
-            font-size: 18px;
-            font-weight: 600;
-            margin: 0 0 12px 0;
-        }
-        
-        .category-title.failing { color: #721c24; }
-        .category-title.passing { color: #155724; }
-        .category-title.not-applicable { color: #383d41; }
-        
-        .category-description {
-            color: #6c757d;
-            font-size: 14px;
-            margin-bottom: 16px;
-        }
-        
-        .check-links {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-        
-        .check-links li {
-            margin: 8px 0;
-        }
-        
-        .check-links a {
-            color: #007bff;
+        a {
+            color: #0066cc;
             text-decoration: none;
-            font-size: 15px;
-            display: block;
-            padding: 6px 0;
         }
         
-        .check-links a:hover {
+        a:hover {
             text-decoration: underline;
         }
         
-        .details-section {
-            background: white;
-            padding: 32px;
-            border-radius: 12px;
-            margin: 32px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        
-        .check-item {
-            padding: 32px 0;
-            border-bottom: 2px solid #f1f3f4;
-        }
-        
-        .check-item:last-child {
-            border-bottom: none;
-        }
-        
-        .check-header {
-            margin-bottom: 16px;
+        .check-detail {
+            margin: 40px 0;
+            padding: 20px 0;
+            border-top: 1px solid #ddd;
         }
         
         .check-title {
-            font-size: 22px;
+            font-size: 16px;
             font-weight: 600;
-            margin: 0 0 8px 0;
-            scroll-margin-top: 100px;
-        }
-        
-        .check-status {
-            display: inline-block;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .check-status.pass {
-            background: #d4edda;
-            color: #155724;
-        }
-        
-        .check-status.fail {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        
-        .check-status.na {
-            background: #e2e3e5;
-            color: #383d41;
+            margin: 0 0 10px 0;
+            scroll-margin-top: 50px;
         }
         
         .check-description {
-            color: #6c757d;
-            font-size: 16px;
-            margin: 12px 0;
-            line-height: 1.5;
-        }
-        
-        .check-timestamp {
-            color: #8e8e93;
-            font-size: 14px;
-            margin-bottom: 20px;
+            color: #666;
+            margin: 10px 0;
         }
         
         .technical-details {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 16px 0;
-        }
-        
-        .technical-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 12px;
+            background: #f9f9f9;
+            padding: 15px;
+            margin: 15px 0;
+            border: 1px solid #eee;
         }
         
         .command {
-            background: #2c3e50;
-            color: #ecf0f1;
-            padding: 12px 16px;
-            border-radius: 6px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+            background: #333;
+            color: #fff;
+            padding: 8px 12px;
+            font-family: monospace;
             font-size: 13px;
             margin: 8px 0;
         }
         
         .output {
             background: white;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            padding: 16px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+            border: 1px solid #ddd;
+            padding: 10px;
+            font-family: monospace;
             font-size: 12px;
-            max-height: 300px;
+            max-height: 200px;
             overflow-y: auto;
             white-space: pre-wrap;
             margin: 8px 0;
         }
         
         .output.error {
-            background: white;
             color: #8B0000;
-            border-color: #dee2e6;
         }
         
         .fix-section {
-            background: #fff3cd;
-            border: 2px solid #ffeaa7;
-            border-radius: 8px;
-            margin: 24px 0;
+            background: #fffbf0;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
         }
         
         .fix-section summary {
-            background: #ffecb3;
-            padding: 16px 24px;
             cursor: pointer;
             font-weight: 600;
-            font-size: 16px;
             color: #856404;
-            user-select: none;
             list-style: none;
         }
         
@@ -325,198 +193,127 @@
             display: none;
         }
         
-        .fix-section summary::marker {
-            display: none;
-        }
-        
-        .fix-section summary:hover {
-            background: #ffe082;
-        }
-        
-        .fix-section summary::before {
-            content: "▶ ";
-            margin-right: 8px;
-            transition: transform 0.2s ease;
-        }
-        
-        .fix-section[open] summary::before {
-            transform: rotate(90deg);
-        }
-        
-        .fix-content {
-            padding: 24px;
-        }
-        
-        .fix-description {
-            color: #856404;
-            font-size: 16px;
-            margin-bottom: 16px;
-            line-height: 1.5;
-        }
-        
         .fix-steps {
-            margin: 0;
-            padding-left: 24px;
-            color: #2c3e50;
+            margin: 15px 0 0 20px;
+            padding-left: 20px;
         }
         
         .fix-steps li {
-            margin: 12px 0;
-            line-height: 1.5;
-            font-size: 15px;
+            margin: 8px 0;
         }
         
         .empty-state {
+            padding: 40px;
             text-align: center;
-            padding: 80px 32px;
-            color: #6c757d;
-        }
-        
-        .empty-state h3 {
-            font-size: 24px;
-            margin-bottom: 12px;
+            color: #666;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <a href="/" class="nav-back">← Back to Security Dashboard</a>
-        
-        <h1>Security Report: {{.Hostname}}</h1>
-        
-        <div class="device-summary">
-            <div class="summary-line">
-                <span class="summary-label">User:</span> <span class="summary-value">{{.User}}</span>
-            </div>
-            <div class="summary-line">
-                <span class="summary-label">Last Update:</span> <span class="summary-value">{{.LastSeen | formatTime}} ({{.LastSeen | formatAgo}})</span>
-            </div>
-            <div class="summary-line">
-                <span class="summary-label">IP:</span> <span class="summary-value">{{if .LastIP}}{{.LastIP}}{{else}}—{{end}}</span>
-            </div>
-            <div class="summary-line">
-                {{$total := add .PassCount .FailCount}}
-                {{if gt $total 0}}
-                    {{$score := div (mul .PassCount 100) $total}}
-                    <span class="summary-label">Compliance:</span> <span class="summary-value status-{{if ge $score 90}}excellent{{else if ge $score 70}}good{{else}}needs-attention{{end}}">{{$score}}%</span>
-                {{else}}
-                    <span class="summary-label">Compliance:</span> <span class="summary-value status-checking">—</span>
-                {{end}}
-            </div>
-        </div>
+    <a href="/" class="nav-back">← Back to Compliance Dashboard</a>
+    
+    <h1>Compliance Report: {{.Hostname}}</h1>
+    
+    <div class="device-summary">
+        <span class="summary-line">
+            <span class="summary-label">User:</span> <span class="summary-value">{{.User}}</span>
+        </span>
+        <span class="summary-line">
+            <span class="summary-label">Last Update:</span> <span class="summary-value">{{.LastSeen | formatTime}} ({{.LastSeen | formatAgo}})</span>
+        </span>
+        <span class="summary-line">
+            <span class="summary-label">IP:</span> <span class="summary-value">{{if .LastIP}}{{.LastIP}}{{else}}—{{end}}</span>
+        </span>
+        <span class="summary-line">
+            {{$total := add .PassCount .FailCount}}
+            {{if gt $total 0}}
+                {{$score := div (mul .PassCount 100) $total}}
+                <span class="summary-label">Compliance:</span> <span class="summary-value status-{{if ge $score 90}}excellent{{else if ge $score 70}}good{{else}}needs-attention{{end}}">{{$score}}%</span>
+            {{else}}
+                <span class="summary-label">Compliance:</span> <span class="summary-value">—</span>
+            {{end}}
+        </span>
     </div>
     
     {{if .CheckResults}}
-    <div class="overview-section">
-        <h2 class="section-title">Security Check Summary</h2>
-        <p class="section-description">
-            This device has been tested against {{len .CheckResults}} security requirements. 
-            Click on any requirement below to see detailed results and remediation steps.
-        </p>
-        
-        <div class="checks-summary">
-            {{if .FailingChecks}}
-            <div class="check-category failing">
-                <h3 class="category-title failing">Requirements Not Met ({{len .FailingChecks}})</h3>
-                <p class="category-description">These security requirements are currently failing and need attention.</p>
-                <ul class="check-links">
-                    {{range .FailingChecks}}
-                    <li><a href="#check-{{. | safeID}}">{{. | title}}</a></li>
-                    {{end}}
-                </ul>
-            </div>
-            {{end}}
-            
-            {{if .PassingChecks}}
-            <div class="check-category passing">
-                <h3 class="category-title passing">Requirements Met ({{len .PassingChecks}})</h3>
-                <p class="category-description">These security requirements are currently satisfied.</p>
-                <ul class="check-links">
-                    {{range .PassingChecks}}
-                    <li><a href="#check-{{. | safeID}}">{{. | title}}</a></li>
-                    {{end}}
-                </ul>
-            </div>
-            {{end}}
-            
-            {{if .NAChecks}}
-            <div class="check-category not-applicable">
-                <h3 class="category-title not-applicable">Not Applicable ({{len .NAChecks}})</h3>
-                <p class="category-description">These requirements don't apply to this device configuration.</p>
-                <ul class="check-links">
-                    {{range .NAChecks}}
-                    <li><a href="#check-{{. | safeID}}">{{. | title}}</a></li>
-                    {{end}}
-                </ul>
-            </div>
-            {{end}}
-        </div>
-    </div>
+    <h2>Compliance Check Results</h2>
     
-    <div class="details-section">
-        <h2 class="section-title">Detailed Security Check Results</h2>
-        <p class="section-description">
-            Below are the complete results for each security requirement, including technical details and step-by-step remediation instructions where applicable.
-        </p>
-        
-        {{range $name := .SortedChecks}}
-        {{$result := index $.CheckResults $name}}
-        {{$check := index $.Checks $name}}
-        
-        <div class="check-item">
-            <div class="check-header">
-                <h3 id="check-{{$name | safeID}}" class="check-title">{{$name | title}}</h3>
-                <span class="check-status {{$result.Status}}">{{$result.Status}}</span>
-            </div>
-            
-            {{if $result.Reason}}
-            <div class="check-description">{{$result.Reason}}</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Check Name</th>
+                <th>Status</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $name := .SortedChecks}}
+            {{$result := index $.CheckResults $name}}
+            <tr>
+                <td><a href="#check-{{$name | safeID}}">{{$name | title}}</a></td>
+                <td>
+                    <span class="status-{{$result.Status}}">
+                        {{if eq $result.Status "pass"}}Pass{{else if eq $result.Status "fail"}}Fail{{else}}N/A{{end}}
+                    </span>
+                </td>
+                <td>{{if $result.Reason}}{{$result.Reason}}{{else}}—{{end}}</td>
+            </tr>
             {{end}}
-            
-            {{if $check}}
-            <div class="check-timestamp">Last checked: {{$check.Timestamp | formatTime}}</div>
-            
-            <div class="technical-details">
-                <div class="technical-title">Technical Details</div>
-                {{range $output := $check.Outputs}}
-                <div class="command">$ {{$output.Command}}</div>
-                {{if $output.Stdout}}
-                <div class="output">{{truncateLines $output.Stdout 50}}</div>
-                {{end}}
-                {{if $output.Stderr}}
-                <div class="output error">{{truncateLines $output.Stderr 20}}</div>
-                {{end}}
-                {{if ne $output.ExitCode 0}}
-                <p style="color: #6c757d; font-size: 14px; margin-top: 8px;">Command exited with code: {{$output.ExitCode}}</p>
-                {{end}}
-                {{end}}
-            </div>
+        </tbody>
+    </table>
+    
+    <h2>Detailed Results</h2>
+    
+    {{range $name := .SortedChecks}}
+    {{$result := index $.CheckResults $name}}
+    {{$check := index $.Checks $name}}
+    
+    <div class="check-detail">
+        <h3 id="check-{{$name | safeID}}" class="check-title">
+            {{$name | title}} - 
+            <span class="status-{{$result.Status}}">
+                {{if eq $result.Status "pass"}}Pass{{else if eq $result.Status "fail"}}Fail{{else}}N/A{{end}}
+            </span>
+        </h3>
+        
+        {{if $result.Reason}}
+        <p class="check-description">{{$result.Reason}}</p>
+        {{end}}
+        
+        {{if $check}}
+        {{if $check.Outputs}}
+        <div class="technical-details">
+            {{range $output := $check.Outputs}}
+            <div class="command">$ {{$output.Command}}</div>
+            {{if $output.Stdout}}
+            <div class="output">{{truncateLines $output.Stdout 30}}</div>
             {{end}}
-            
-            {{if $result.Remediation}}
-            <details class="fix-section">
-                <summary>🔧 How to Fix This Issue</summary>
-                <div class="fix-content">
-                    <div class="fix-description">
-                        Follow these steps to resolve this security requirement:
-                    </div>
-                    <ol class="fix-steps">
-                    {{range $result.Remediation}}
-                        <li>{{.}}</li>
-                    {{end}}
-                    </ol>
-                </div>
-            </details>
+            {{if $output.Stderr}}
+            <div class="output error">{{truncateLines $output.Stderr 10}}</div>
+            {{end}}
             {{end}}
         </div>
         {{end}}
+        {{end}}
+        
+        {{if $result.Remediation}}
+        <details class="fix-section">
+            <summary>How to Fix</summary>
+            <ol class="fix-steps">
+            {{range $result.Remediation}}
+                <li>{{.}}</li>
+            {{end}}
+            </ol>
+        </details>
+        {{end}}
     </div>
+    {{end}}
     
     {{else}}
     <div class="overview-section">
         <div class="empty-state">
-            <h3>No Security Checks Available</h3>
-            <p>This device hasn't completed its security assessment yet. Check back after the device reports its status.</p>
+            <h3>No Compliance Checks Available</h3>
+            <p>This device hasn't completed its compliance assessment yet. Check back after the device reports its status.</p>
         </div>
     </div>
     {{end}}

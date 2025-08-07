@@ -528,3 +528,105 @@ func uninstallCron() error {
 
 	return nil
 }
+
+// installWindows installs Windows Task Scheduler task.
+func installWindows(agentPath, _, _ string) error {
+	// Create the task XML content
+	taskXML := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>GitMDM Compliance Agent</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%s</Command>
+    </Exec>
+  </Actions>
+</Task>`, agentPath)
+
+	// Write task XML to temp file
+	tempFile, err := os.CreateTemp("", "gitmdm-task-*.xml")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name()) //nolint:errcheck
+
+	if _, err := tempFile.WriteString(taskXML); err != nil {
+		return fmt.Errorf("failed to write task XML: %w", err)
+	}
+	tempFile.Close() //nolint:errcheck
+
+	// Delete existing task if present (ignore errors)
+	cmd := exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx
+	_ = cmd.Run() //nolint:errcheck
+
+	// Create the scheduled task
+	cmd = exec.Command("schtasks", "/Create", "/TN", "GitMDM Agent", "/XML", tempFile.Name()) //nolint:noctx
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create scheduled task: %w\nOutput: %s", err, output)
+	}
+
+	// Start the task immediately
+	cmd = exec.Command("schtasks", "/Run", "/TN", "GitMDM Agent") //nolint:noctx
+	_ = cmd.Run() //nolint:errcheck // Best effort
+
+	return nil
+}
+
+// uninstallWindows removes Windows Task Scheduler task.
+func uninstallWindows() error {
+	// Stop the task
+	cmd := exec.Command("schtasks", "/End", "/TN", "GitMDM Agent") //nolint:noctx
+	_ = cmd.Run() //nolint:errcheck // Best effort
+
+	// Delete the task
+	cmd = exec.Command("schtasks", "/Delete", "/TN", "GitMDM Agent", "/F") //nolint:noctx
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if !strings.Contains(string(output), "The system cannot find") {
+			return fmt.Errorf("failed to delete scheduled task: %w\nOutput: %s", err, output)
+		}
+		// Task doesn't exist, that's fine
+	}
+
+	// Try to stop any running agent process
+	cmd = exec.Command("taskkill", "/F", "/IM", "gitmdm-agent.exe") //nolint:noctx
+	_ = cmd.Run() //nolint:errcheck // Best effort
+
+	return nil
+}

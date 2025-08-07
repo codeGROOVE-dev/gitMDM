@@ -60,7 +60,13 @@ build-openbsd:
 	GOOS=openbsd GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(SERVER_BINARY)-openbsd-amd64 $(SERVER_PATH)
 	GOOS=openbsd GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(AGENT_BINARY)-openbsd-amd64 $(AGENT_PATH)
 
-build-all: build-linux build-darwin build-freebsd build-openbsd
+build-windows:
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(SERVER_BINARY)-windows-amd64.exe $(SERVER_PATH)
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(BUILD_FLAGS) -o $(AGENT_BINARY)-windows-amd64.exe $(AGENT_PATH)
+	GOOS=windows GOARCH=arm64 $(GOBUILD) $(BUILD_FLAGS) -o $(SERVER_BINARY)-windows-arm64.exe $(SERVER_PATH)
+	GOOS=windows GOARCH=arm64 $(GOBUILD) $(BUILD_FLAGS) -o $(AGENT_BINARY)-windows-arm64.exe $(AGENT_PATH)
+
+build-all: build-linux build-darwin build-freebsd build-openbsd build-windows
 
 ko-build:
 	ko build --bare ./cmd/server

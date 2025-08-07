@@ -1,12 +1,14 @@
-# gitMDM 🧪
+# gitMDM
 
-The MDM for folks that care about security.
+The SOC-2 compliance solution for the discerningly paranoid security engineer.
+
+![logo](./media/logo_small.png "gitMDM logo")
 
 ## Your Problem
 
 Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9.
 
-Traditional MDMs run as root, execute arbitrary code from their cloud servers, and auto-install binaries downloaded from the internet. Your security engineer just had an aneurysm.
+Traditional MDMs run as root, execute arbitrary code from cloud servers, and auto-install binaries downloaded from the internet. Your security engineer just had an aneurysm.
 
 ## Our Solution
 
@@ -30,35 +32,38 @@ Your Team: "...continue"
 
 ## Demo
 
-Visit our demo instance at https://gitmdm.codegroove.dev/
+Visit our demo instance at https://gitmdm.codegroove.dev/ - OK, so it's actually our prod instance.
 
-## Quick Start for the Impatient
+## Quick Start
+
+Build static binaries:
 
 ```bash
-# On your secure server (Cloud Run, or laptop, we don't judge)
+make all
+```
+
+Run a server:
+
+```bash
 ./gitmdm-server -git /opt/compliance
+```
 
-# On your OpenBSD machine
-$ doas pkg_add gitmdm-agent  # just kidding, compile it yourself
-$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
+If you are a fan of Google Cloud Run, check out `./hacks/deploy.sh` for a deployment script.
 
-# On your Linux laptop
-$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
+On a client:
 
-# On that Mac the designer insisted on
+```bash
 $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 ```
 
-## What SOC 2 Actually Requires vs What We Check
+## What kind of checks do we do?
 
-| SOC 2 Says | Traditional MDMs Do | We Do |
-|------------|---------------------|--------|
-| Disk encryption | Run as root to verify and enforce | Check encryption status as user |
-| Screen locks | Execute scripts as root to enforce policies | Read your existing screensaver config |
-| OS updates | Download and install updates as root | Report current version numbers |
-| Firewall enabled | Execute commands as root to modify rules | Check firewall status (read-only) |
+* Full Disk Encryption
+* Screen locks
+* OS updates
+* Firewall
 
-## Platform Detection That Actually Works
+## What kind of bizarre platforms do you support?
 
 ```yaml
 # Your snowflake setups, our problem:
@@ -66,7 +71,8 @@ $ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 - Sway on Alpine (of course)
 - i3 on Debian (classic)
 - Whatever that custom Wayland compositor you wrote is
-- Even macOS (unfortunate, but supported)
+- macOS (10.15+)
+- Windows 11/10 (though we've never tried it)
 ```
 
 We detect 11+ desktop environments because your team refuses to standardize.
@@ -87,26 +93,24 @@ The server literally cannot execute commands. We removed the code. It's not ther
 
 ## For Your Compliance Team
 
-"What if someone tampers with the agent?"
+> "What happens if someone compromises the server?"
+
+Nothing. Perhaps they can clean up the old stale check-in data while they are there.
+
+> "What if someone tampers with the agent?"
 
 They can. It's their machine. They can also lie on spreadsheets. At least this has timestamps.
 
-"Is this enterprise-ready?"
+> "Is this enterprise-ready?"
 
 No. But neither was Stripe when you started using it.
-
-## Building
-
-```bash
-make all
-```
 
 ## Installation That Respects Your OS
 
 - **Linux**: systemd user service (falls back to cron if you're systemd-free)
-- **OpenBSD**: cron (because rc.d requires root and we're not animals)
+- **(Dragonfly|Net|Free|Open)BSD**: cron (because rc.d requires root and we're not animals)
 - **macOS**: launchd (the least worst option)
-- **FreeBSD/NetBSD**: cron (see OpenBSD)
+- **Windows**: Task Scheduler (runs as user, not SYSTEM)
 
 ---
 

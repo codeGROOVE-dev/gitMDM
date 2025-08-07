@@ -67,19 +67,17 @@ type CheckResult struct {
 }
 
 // BuildDeviceDetail creates a detailed view model for a single device.
-func BuildDeviceDetail(device *gitmdm.Device) *DeviceDetail {
+// staleThreshold determines which checks to include - zero time means include all.
+func BuildDeviceDetail(device *gitmdm.Device, staleThreshold time.Time) *DeviceDetail {
 	detail := &DeviceDetail{
 		Device:       device,
 		CheckResults: make(map[string]CheckResult),
 	}
 
-	// Filter out checks that are more than 1 hour older than LastSeen
-	staleThreshold := device.LastSeen.Add(-1 * time.Hour)
-
 	// Process all checks
 	for checkName, check := range device.Checks {
-		// Skip stale checks that are too old
-		if !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
+		// Skip stale checks only if we have a threshold and the check has a timestamp
+		if !staleThreshold.IsZero() && !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
 			continue
 		}
 		var emoji string
@@ -212,7 +210,7 @@ func extractFromSystemInfo(device *gitmdm.Device) (osName, version string) {
 	if osName, osVersion := parseLinuxOutput(output); osName != unknownVersion {
 		return osName, osVersion
 	}
-	if osName, osVersion := parseFreeBSDOutput(output); osName != unknownVersion {
+	if osName, osVersion := parseUnixUnameOutput(output); osName != unknownVersion {
 		return osName, osVersion
 	}
 	if osName, osVersion := parseWindowsOutput(output); osName != unknownVersion {
@@ -309,20 +307,28 @@ func parseLinuxOutput(output string) (osName, version string) {
 	return unknownVersion, unknownVersion
 }
 
-// parseFreeBSDOutput parses FreeBSD freebsd-version output.
-func parseFreeBSDOutput(output string) (osName, version string) {
-	if !strings.Contains(output, "FreeBSD") {
+// parseUnixUnameOutput parses uname -srm output for Unix systems.
+// Example outputs:
+// OpenBSD 7.4 amd64
+// FreeBSD 14.0-RELEASE amd64
+// NetBSD 10.0 amd64
+// DragonFly 6.4-RELEASE x86_64.
+func parseUnixUnameOutput(output string) (osName, version string) {
+	parts := strings.Fields(output)
+	if len(parts) < 2 {
 		return unknownVersion, unknownVersion
 	}
 
-	lines := strings.Split(output, "\n")
-	if len(lines) > 0 {
-		parts := strings.Fields(lines[0])
-		if len(parts) >= 2 {
-			return "FreeBSD", parts[1]
-		}
+	// First field is OS name, second is version
+	osName = parts[0]
+	version = parts[1]
+
+	// Clean up version strings that have -RELEASE, -CURRENT, etc.
+	if idx := strings.Index(version, "-"); idx > 0 {
+		version = version[:idx]
 	}
-	return "FreeBSD", unknownVersion
+
+	return osName, version
 }
 
 // parseWindowsOutput parses Windows systeminfo output.

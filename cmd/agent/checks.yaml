@@ -576,14 +576,8 @@ checks:
       - output: sw_vers
     linux:
       - file: /etc/os-release
-    freebsd:
-      - output: freebsd-version
-    openbsd:
-      - output: sysctl -n kern.version
-    netbsd:
-      - output: sysctl -n kern.version
-    dragonfly:
-      - output: sysctl -n kern.version
+    unix:
+      - output: uname -srm
     solaris:
       - file: /etc/release
     illumos:

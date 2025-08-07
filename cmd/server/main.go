@@ -81,9 +81,10 @@ var (
 
 // ComplianceCache stores pre-calculated compliance stats for a device.
 type ComplianceCache struct {
-	PassCount int
-	FailCount int
-	NACount   int
+	PassCount    int
+	FailCount    int
+	NACount      int
+	HasCheckedIn bool // true if device has reported since server startup
 }
 
 // Server represents the gitMDM server that receives and stores compliance reports.
@@ -391,14 +392,26 @@ func (s *Server) loadDevices(ctx context.Context) error {
 // updateComplianceCacheLocked updates the compliance cache for a device.
 // Caller must hold s.mu lock.
 func (s *Server) updateComplianceCacheLocked(device *gitmdm.Device) {
+	// Get existing cache to preserve HasCheckedIn flag
+	existingCache, exists := s.complianceCache[device.HardwareID]
 	cache := &ComplianceCache{}
+	if exists {
+		cache.HasCheckedIn = existingCache.HasCheckedIn
+	}
 
-	// Filter out checks that are more than 1 hour older than LastSeen
-	staleThreshold := device.LastSeen.Add(-1 * time.Hour)
-
+	// Determine staleness threshold
+	var staleThreshold time.Time
+	if cache.HasCheckedIn {
+		// Device has checked in since server startup - use 1 day staleness
+		staleThreshold = time.Now().Add(-24 * time.Hour)
+	} else {
+		// Device hasn't checked in yet - use all data from git
+		staleThreshold = time.Time{} // Zero time means no filtering
+	}
+	
 	for _, check := range device.Checks {
-		// Skip stale checks that are too old
-		if !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
+		// Skip stale checks only if we have a threshold and the check has a timestamp
+		if !staleThreshold.IsZero() && !check.Timestamp.IsZero() && check.Timestamp.Before(staleThreshold) {
 			continue
 		}
 
@@ -526,7 +539,9 @@ func (s *Server) handleIndex(writer http.ResponseWriter, req *http.Request) {
 					item.ComplianceClass = "poor"
 				}
 			} else {
-				item.ComplianceClass = "poor"
+				// No checks data available
+				item.ComplianceClass = "unknown"
+				item.ComplianceEmoji = "—"
 			}
 		} else {
 			item.ComplianceClass = "poor"
@@ -633,6 +648,7 @@ func (s *Server) handleDevice(writer http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	device, exists := s.devices[hardwareID]
+	cache, _ := s.complianceCache[hardwareID]
 	s.mu.RUnlock()
 
 	if !exists {
@@ -641,8 +657,18 @@ func (s *Server) handleDevice(writer http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine staleness threshold based on whether device has checked in
+	var staleThreshold time.Time
+	if cache != nil && cache.HasCheckedIn {
+		// Device has checked in since server startup - use 1 day staleness
+		staleThreshold = time.Now().Add(-24 * time.Hour)
+	} else {
+		// Device hasn't checked in yet - use all data from git
+		staleThreshold = time.Time{} // Zero time means no filtering
+	}
+
 	// Build detailed view model with compliance analysis
-	viewData := viewmodels.BuildDeviceDetail(device)
+	viewData := viewmodels.BuildDeviceDetail(device, staleThreshold)
 
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(writer, "device.html", viewData); err != nil {
@@ -783,6 +809,12 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	// Always update in-memory cache first for immediate availability
 	s.mu.Lock()
 	s.devices[device.HardwareID] = device
+	// Mark that this device has checked in since server startup
+	if existingCache, exists := s.complianceCache[device.HardwareID]; exists {
+		existingCache.HasCheckedIn = true
+	} else {
+		s.complianceCache[device.HardwareID] = &ComplianceCache{HasCheckedIn: true}
+	}
 	// Update compliance cache
 	s.updateComplianceCacheLocked(device)
 	s.mu.Unlock()

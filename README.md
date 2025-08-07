@@ -6,26 +6,26 @@ The MDM for startups that actually care about security.
 
 Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9. 
 
-Traditional MDMs want root access, auto-update themselves from the internet, and can execute arbitrary code pushed from their cloud. Your security engineer just had an aneurysm.
+Traditional MDMs run as root, execute arbitrary code from their cloud servers, and auto-install binaries downloaded from the internet. Your security engineer just had an aneurysm.
 
 ## Our Solution
 
 gitMDM proves compliance without the backdoor:
 
 ```
-Traditional MDM: "Install our kernel extension!"
+Traditional MDM: "Install our root agent that downloads and executes code from our servers!"
 Your Team: "How about no."
 
-gitMDM: "Run a read-only agent that reports to YOUR server"
+gitMDM: "Run a read-only agent as a regular user that only reports"
 Your Team: "...continue"
 ```
 
 ### Why Your Security Team Will Actually Approve This
 
-- **Zero Remote Execution**: Can't push commands. Not won't. Can't. The server only receives data.
-- **No Auto-Updates**: Agent is a static binary. Updates require YOU to rebuild and redeploy.
-- **Runs as User**: No root, no SYSTEM. Just a regular user process.
-- **You Own Everything**: Your server, your git repo, your data. Host it in your VPC.
+- **Zero Remote Execution**: Can't push commands or install software. The server only receives data.
+- **No Auto-Updates**: No downloading binaries from the internet. Updates require YOU to rebuild and redeploy.
+- **Runs as User**: No root, no SYSTEM. Can't execute arbitrary code or modify your system.
+- **You Own Everything**: Your server, your git repo, your data. No third-party cloud with root access to your fleet.
 - **Audit Everything**: Every change is a git commit. `git blame` for compliance.
 
 ## Quick Start for the Impatient
@@ -51,10 +51,10 @@ Join keys stored in `~/.config/gitmdm/` (or wherever your OS says), not in proce
 
 | SOC 2 Says | Traditional MDMs Do | We Do |
 |------------|---------------------|--------|
-| Disk encryption | Run as root, phone home for instructions | Read `/proc/mounts` as user |
-| Screen locks | Auto-update from vendor's CDN | Check your screensaver config |
-| OS updates | Force reboots during demos | Report version numbers |
-| Firewall enabled | Execute arbitrary scripts from cloud | Check `iptables -L` output |
+| Disk encryption | Run as root to verify and enforce | Check encryption status as user |
+| Screen locks | Execute scripts as root to enforce policies | Read your existing screensaver config |
+| OS updates | Download and install updates as root | Report current version numbers |
+| Firewall enabled | Execute commands as root to modify rules | Check firewall status (read-only) |
 
 ## Platform Detection That Actually Works
 
@@ -129,7 +129,7 @@ A: No. Check the code. The handler doesn't exist.
 A: It's 2 dependencies: yaml and retry. Vendor them if paranoid.
 
 **Q: Does it require root?**  
-A: Never. User-level only. Your kernel remains unmolested.
+A: Never. User-level only. Just reads system configuration.
 
 **Q: What data does it collect?**  
 A: Read `checks.yaml`. It's compiled in. No surprises.
@@ -154,4 +154,4 @@ A: On the roadmap. PRs welcome from fellow paranoids.
 
 ---
 
-*"Because your security posture shouldn't require the missionary position."*
+*"Because compliance doesn't require compromise."*

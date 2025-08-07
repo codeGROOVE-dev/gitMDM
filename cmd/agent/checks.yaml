@@ -175,78 +175,78 @@ checks:
           - Set "Require password after..." to 5 seconds or less
     unix:
       # GNOME - Only check if GNOME Shell is running
-      - output: pgrep gnome-shell && gsettings get org.gnome.desktop.screensaver lock-enabled
+      - output: pgrep gnome-shell >/dev/null && gsettings get org.gnome.desktop.screensaver lock-enabled
         includes: "false"
         remediation:
           - Enable screen lock with 'gsettings set org.gnome.desktop.screensaver lock-enabled true'
       # MATE - Only check if MATE session is running
-      - output: pgrep mate-session && gsettings get org.mate.screensaver lock-enabled
+      - output: pgrep mate-session >/dev/null && gsettings get org.mate.screensaver lock-enabled
         includes: "false"
         remediation:
           - Enable screen lock with 'gsettings set org.mate.screensaver lock-enabled true'
       # XFCE - Only check if XFCE session is running
-      - output: pgrep xfce4-session && xfconf-query -c xfce4-screensaver -p /saver/enabled
+      - output: pgrep xfce4-session >/dev/null && xfconf-query -c xfce4-screensaver -p /saver/enabled
         includes: "false"
         remediation:
           - Enable screensaver with 'xfconf-query -c xfce4-screensaver -p /saver/enabled -s true'
-      - output: pgrep xfce4-session && xfconf-query -c xfce4-screensaver -p /lock/enabled
+      - output: pgrep xfce4-session >/dev/null && xfconf-query -c xfce4-screensaver -p /lock/enabled
         includes: "false"
         remediation:
           - Enable screen lock with 'xfconf-query -c xfce4-screensaver -p /lock/enabled -s true'
       # KDE Plasma - Only check if KDE session is running
-      - output: pgrep plasmashell && kreadconfig5 --file kscreenlockerrc --group Daemon --key Autolock
+      - output: pgrep plasmashell >/dev/null && kreadconfig5 --file kscreenlockerrc --group Daemon --key Autolock
         includes: "false"
         remediation:
           - Enable automatic screen locking in KDE System Settings > Desktop Behavior > Screen Locking
           - Or run 'kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock true'
       # Cinnamon - Only check if Cinnamon is running
-      - output: pgrep cinnamon && gsettings get org.cinnamon.desktop.screensaver lock-enabled
+      - output: pgrep cinnamon >/dev/null && gsettings get org.cinnamon.desktop.screensaver lock-enabled
         includes: "false"
         remediation:
           - Enable Cinnamon screen lock with 'gsettings set org.cinnamon.desktop.screensaver lock-enabled true'
       # Budgie - Only check if Budgie is running
-      - output: pgrep budgie-panel && gsettings get org.gnome.desktop.screensaver lock-enabled
+      - output: pgrep budgie-panel >/dev/null && gsettings get org.gnome.desktop.screensaver lock-enabled
         includes: "false"
         remediation:
           - Enable Budgie screen lock with 'gsettings set org.gnome.desktop.screensaver lock-enabled true'
       # LXQt - Only check if LXQt session is running
-      - output: pgrep lxqt-session && grep -r "lockScreenCommand" ~/.config/lxqt/
+      - output: pgrep lxqt-session >/dev/null && grep "lockScreenCommand" ~/.config/lxqt/session.conf 2>/dev/null
         excludes: "lockScreenCommand"
         remediation:
           - Configure LXQt screen locking
           - Set lockScreenCommand in ~/.config/lxqt/session.conf
           - Install a screen locker like light-locker, xscreensaver, or xlock
       # LXDE - Only check if LXDE session is running
-      - output: pgrep lxsession && (command -v light-locker || command -v xscreensaver || command -v xlock)
+      - output: pgrep lxsession >/dev/null && (command -v light-locker || command -v xscreensaver || command -v xlock)
         exitcode: 1
         remediation:
           - Install a screen locker for LXDE
           - "Linux/FreeBSD: Install light-locker or xscreensaver"
           - "OpenBSD/NetBSD: Install xlock from packages"
       # i3 Window Manager - Only check if i3 is running
-      - output: pgrep i3 && grep -r "i3lock\|xautolock\|xss-lock" ~/.config/i3/ ~/.i3/config
+      - output: pgrep i3 >/dev/null && (grep "i3lock\|xautolock\|xss-lock" ~/.config/i3/config 2>/dev/null || grep "i3lock\|xautolock\|xss-lock" ~/.i3/config 2>/dev/null)
         excludes: "i3lock|xautolock|xss-lock"
         remediation:
           - Install and configure screen locking for i3
           - "Install locker: i3lock, slock, or xlock (varies by OS)"
           - "Add to i3 config: 'exec --no-startup-id xss-lock --transfer-sleep-lock -- i3lock -n'"
       # Openbox Window Manager - Only check if openbox is running
-      - output: pgrep openbox && grep -r "xautolock\|xss-lock" ~/.config/openbox/
+      - output: pgrep openbox >/dev/null && grep "xautolock\|xss-lock" ~/.config/openbox/autostart 2>/dev/null
         excludes: "xautolock|xss-lock"
         remediation:
           - Configure screen locking for Openbox
           - "Add to ~/.config/openbox/autostart: 'xautolock -time 15 -locker \"i3lock -c 000000\" &'"
       # Sway (Wayland) - Only check if sway is running
-      - output: pgrep sway && grep -r "exec swayidle" ~/.config/sway/
+      - output: pgrep sway >/dev/null && grep "exec swayidle" ~/.config/sway/config 2>/dev/null
         excludes: "swayidle"
         remediation:
           - Configure swayidle to lock screen automatically
           - "Add to Sway config: 'exec swayidle -w timeout 900 \"swaylock -f\" before-sleep \"swaylock -f\"'"
       # Generic X11 fallback - Only if X11 is running but no specific DE detected
       - output: >
-          pgrep Xorg && ! (pgrep gnome-shell || pgrep mate-session || pgrep xfce4-session ||
-          pgrep plasmashell || pgrep cinnamon || pgrep budgie-panel || pgrep lxqt-session ||
-          pgrep lxsession || pgrep i3 || pgrep openbox || pgrep sway) && xset q
+          pgrep Xorg >/dev/null && ! (pgrep gnome-shell >/dev/null || pgrep mate-session >/dev/null || pgrep xfce4-session >/dev/null ||
+          pgrep plasmashell >/dev/null || pgrep cinnamon >/dev/null || pgrep budgie-panel >/dev/null || pgrep lxqt-session >/dev/null ||
+          pgrep lxsession >/dev/null || pgrep i3 >/dev/null || pgrep openbox >/dev/null || pgrep sway >/dev/null) && xset q
         includes: "timeout:.*0"
         remediation:
           - Configure X11 screen saver with 'xset s 900'
@@ -283,11 +283,11 @@ checks:
           - Set GNOME screensaver timeout to 15 minutes or less
           - Run 'gsettings set org.gnome.desktop.session idle-delay 900'
       # MATE - Only check timeout if MATE session is running
-      - output: pgrep mate-session && gsettings get org.mate.screensaver idle-delay
+      - output: pgrep mate-session && gsettings get org.mate.screensaver lock-delay
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
         remediation:
           - Set MATE screensaver timeout to 15 minutes or less
-          - Run 'gsettings set org.mate.screensaver idle-delay 15'
+          - Run 'gsettings set org.mate.screensaver lock-delay 15'
       # XFCE - Only check timeout if XFCE session is running
       - output: pgrep xfce4-session && xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-on-ac-sleep
         includes: "^(0|1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})$"
@@ -319,31 +319,31 @@ checks:
           - Set Budgie screensaver timeout to 15 minutes or less
           - Run 'gsettings set org.gnome.desktop.session idle-delay 900'
       # LXQt - Only check timeout if LXQt session is running
-      - output: pgrep lxqt-session && grep -r "timeBeforeIdleMs" ~/.config/lxqt/
+      - output: pgrep lxqt-session >/dev/null && grep "timeBeforeIdleMs" ~/.config/lxqt/lxqt-config-powermanagement.conf 2>/dev/null
         includes: "timeBeforeIdleMs.*([9][1-9][0-9][0-9][0-9][0-9]|[1-9][0-9]{6,})"
         remediation:
           - Set LXQt idle timeout to 15 minutes (900000 ms) or less
           - Configure in LXQt System Settings > Power Management
       # LXDE - Only check timeout if LXDE session is running
-      - output: pgrep lxsession && grep -r "sleep_display_ac" ~/.config/lxsession/ /etc/xdg/lxsession/
+      - output: pgrep lxsession >/dev/null && (grep "sleep_display_ac" ~/.config/lxsession/LXDE/desktop.conf 2>/dev/null || grep "sleep_display_ac" /etc/xdg/lxsession/LXDE/desktop.conf 2>/dev/null)
         includes: "sleep_display_ac.*([1-9][6-9]|[2-9][0-9]|[1-9][0-9]{2,})"
         remediation:
           - Set LXDE display sleep to 15 minutes or less
           - Edit ~/.config/lxsession/LXDE/desktop.conf and set sleep_display_ac=15
       # Sway - Only check timeout if sway is running
-      - output: pgrep sway && grep -r "timeout" ~/.config/sway/
+      - output: pgrep sway >/dev/null && grep "timeout" ~/.config/sway/config 2>/dev/null
         includes: "timeout [9][1-9][0-9][0-9]|timeout [1-9][0-9]{4,}"
         remediation:
           - Configure swayidle timeout to 15 minutes (900 seconds) or less
           - "Add to Sway config: 'exec swayidle -w timeout 900 \"swaylock -f\"'"
       # i3 Window Manager - Only check timeout if i3 is running
-      - output: pgrep i3 && grep -r "xautolock.*-time" ~/.config/i3/ ~/.i3/config
+      - output: pgrep i3 >/dev/null && (grep "xautolock.*-time" ~/.config/i3/config 2>/dev/null || grep "xautolock.*-time" ~/.i3/config 2>/dev/null)
         includes: "-time [1-9][6-9]|-time [2-9][0-9]|-time [1-9][0-9]{2,}"
         remediation:
           - Configure xautolock timeout to 15 minutes or less
           - "Add to i3 config: 'exec --no-startup-id xautolock -time 15 -locker \"i3lock -c 000000\"'"
       # Openbox - Only check timeout if openbox is running
-      - output: pgrep openbox && grep -r "xautolock.*-time" ~/.config/openbox/
+      - output: pgrep openbox >/dev/null && grep "xautolock.*-time" ~/.config/openbox/autostart 2>/dev/null
         includes: "-time [1-9][6-9]|-time [2-9][0-9]|-time [1-9][0-9]{2,}"
         remediation:
           - Configure xautolock timeout to 15 minutes or less

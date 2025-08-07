@@ -16,6 +16,14 @@ func AnalyzeCheck(output *gitmdm.CommandOutput, rule config.CommandRule) error {
 		return nil // Not a failure, just not applicable
 	}
 
+	// If command failed (non-zero exit) and no explicit exitcode check is configured,
+	// skip includes/excludes analysis (the command couldn't run properly)
+	if output.ExitCode != 0 && rule.ExitCode == nil {
+		// Mark as skipped since the command couldn't run (e.g., pgrep failed)
+		output.Skipped = true
+		return nil
+	}
+
 	// Combine stdout and stderr for analysis
 	content := output.Stdout + output.Stderr
 

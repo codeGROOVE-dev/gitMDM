@@ -63,6 +63,9 @@ const (
 //go:embed templates/*
 var templates embed.FS
 
+//go:embed static/*
+var staticFiles embed.FS
+
 var (
 	gitURL = flag.String("git", os.Getenv("GIT_REPO"), "Git repository URL or path to clone to temp directory (env: GIT_REPO)")
 	clone  = flag.String("clone", "", "Path to existing local git clone to work in directly")
@@ -271,6 +274,10 @@ func main() {
 	mux.HandleFunc("/api/v1/report", server.handleReport)
 	mux.HandleFunc("/api/v1/devices", server.handleAPIDevices)
 	mux.HandleFunc("/health", server.handleHealth)
+
+	// Serve static files
+	staticHandler := http.FileServer(http.FS(staticFiles))
+	mux.Handle("/static/", http.StripPrefix("/static/", staticHandler))
 
 	srv := &http.Server{
 		Addr:           ":" + *port,
@@ -877,9 +884,8 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("X-XSS-Protection", "1; mode=block")
 		writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		cspPolicy := "default-src 'self'; style-src 'self' 'unsafe-inline'; " +
-			"script-src 'self' 'sha256-lx2dNpe/W18YJvrDgNmLsDSM85bNRGfsh94PEHc787A=' " +
-			"'sha256-luoavMkf5zRI42vsq0JhiXNoMTeddLeACqCCElcW+GE='"
+		// Simplified CSP - only allow self-hosted scripts and styles
+		cspPolicy := "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
 		writer.Header().Set("Content-Security-Policy", cspPolicy)
 
 		start := time.Now()

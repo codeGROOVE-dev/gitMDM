@@ -63,25 +63,22 @@ func NewLocal(ctx context.Context, localPath string) (*Store, error) {
 	// Check if it's already a git repository
 	var repo *git.Repository
 	if _, err := os.Stat(filepath.Join(absPath, ".git")); err != nil {
-		if os.IsNotExist(err) {
-			// Initialize new repository
-			log.Printf("[INFO] Initializing new git repository at %s", absPath)
-			repo, err = git.PlainInit(absPath, false)
-			if err != nil {
-				return nil, fmt.Errorf("failed to initialize git repository: %w", err)
-			}
-
-			// Create initial commit
-			if err := createInitialCommit(repo, absPath); err != nil {
-				log.Printf("[WARN] Failed to create initial commit: %v", err)
-			}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to check git repository: %w", err)
 		}
-		return nil, fmt.Errorf("failed to check git repository: %w", err)
-	}
-	// Open existing repository
-	repo, err = git.PlainOpen(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open git repository: %w", err)
+		// Initialize new repository
+		log.Printf("[INFO] Initializing new git repository at %s", absPath)
+		repo, err = git.PlainInit(absPath, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize git repository: %w", err)
+		}
+		// No initial commit needed - first device will create directory structure
+	} else {
+		// Open existing repository
+		repo, err = git.PlainOpen(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open git repository: %w", err)
+		}
 	}
 
 	s := &Store{
@@ -102,8 +99,8 @@ func NewLocal(ctx context.Context, localPath string) (*Store, error) {
 	}
 
 	// Create devices directory if it doesn't exist
-	devicesDir := filepath.Join(s.repoPath, devicesDir)
-	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
+	devicesDirPath := filepath.Join(s.repoPath, devicesDir)
+	if err := os.MkdirAll(devicesDirPath, repoDirPerm); err != nil {
 		return nil, fmt.Errorf("failed to create devices directory: %w", err)
 	}
 
@@ -188,8 +185,8 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 	}
 
 	// Create devices directory if needed
-	devicesDir := filepath.Join(s.repoPath, devicesDir)
-	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
+	devicesDirPath := filepath.Join(s.repoPath, devicesDir)
+	if err := os.MkdirAll(devicesDirPath, repoDirPerm); err != nil {
 		return nil, fmt.Errorf("failed to create devices directory: %w", err)
 	}
 
@@ -386,8 +383,8 @@ func (s *Store) LoadDevices(ctx context.Context) ([]*gitmdm.Device, error) {
 		}
 	}
 
-	devicesDir := filepath.Join(s.repoPath, devicesDir)
-	entries, err := os.ReadDir(devicesDir)
+	devicesDirPath := filepath.Join(s.repoPath, devicesDir)
+	entries, err := os.ReadDir(devicesDirPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Print("[INFO] No devices directory found, returning empty list")
@@ -538,48 +535,4 @@ func sanitizeID(id string) string {
 	}
 
 	return result
-}
-
-// createInitialCommit creates an initial commit with the devices directory.
-func createInitialCommit(repo *git.Repository, repoPath string) error {
-	w, err := repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("failed to get worktree: %w", err)
-	}
-
-	// Create devices directory
-	devicesDir := filepath.Join(repoPath, devicesDir)
-	if err := os.MkdirAll(devicesDir, repoDirPerm); err != nil {
-		return fmt.Errorf("failed to create devices directory: %w", err)
-	}
-
-	// Create README in devices directory to ensure it's tracked
-	readmePath := filepath.Join(devicesDir, "README.md")
-	readmeContent := `# Device Compliance Data
-
-This directory contains compliance reports for all monitored devices.
-Each device has its own subdirectory identified by its hardware ID.
-`
-	if err := os.WriteFile(readmePath, []byte(readmeContent), 0o600); err != nil {
-		return fmt.Errorf("failed to create README: %w", err)
-	}
-
-	// Add README to staging
-	if _, err := w.Add("devices/README.md"); err != nil {
-		return fmt.Errorf("failed to add README: %w", err)
-	}
-
-	// Create initial commit
-	_, err = w.Commit("Initial commit - GitMDM repository initialized", &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "GitMDM",
-			Email: "gitmdm@localhost",
-			When:  time.Now(),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create initial commit: %w", err)
-	}
-
-	return nil
 }

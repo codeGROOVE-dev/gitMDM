@@ -11,6 +11,6 @@ rules:
   document-start: disable
   line-length:
     level: warning
-    max: 160
+    max: 200
     allow-non-breakable-inline-mappings: true
   truthy: disable

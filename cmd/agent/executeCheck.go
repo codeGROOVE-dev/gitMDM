@@ -107,7 +107,7 @@ func (a *Agent) executeCommand(ctx context.Context, checkName string, rule confi
 		if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
 			// Temporarily set PATH for LookPath
 			oldPath := os.Getenv("PATH")
-			if err := os.Setenv("PATH", getSecurePath()); err != nil {
+			if err := os.Setenv("PATH", securePath()); err != nil {
 				log.Printf("[WARN] Failed to set PATH for command check: %v", err)
 			}
 			_, lookupErr := exec.LookPath(primaryCmd)

@@ -1,0 +1,530 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"text/template"
+	"time"
+)
+
+const (
+	installDir = ".gitmdm"
+	agentName  = "gitmdm-agent"
+	configName = "config.json"
+)
+
+// AgentConfig stores the agent configuration.
+type AgentConfig struct {
+	ServerURL string `json:"server_url"`
+	JoinKey   string `json:"join_key"`
+}
+
+// configDir returns the appropriate configuration directory for the platform.
+// os.UserConfigDir() returns:
+// - macOS: ~/Library/Application Support
+// - Linux/BSD: $XDG_CONFIG_HOME or ~/.config
+// - Windows: %AppData%
+func configDir() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user config directory: %w", err)
+	}
+	return filepath.Join(configDir, "gitmdm"), nil
+}
+
+// loadConfig loads the agent configuration from the config file.
+func loadConfig() (*AgentConfig, error) {
+	configDir, err := configDir()
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(configDir, configName)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config AgentConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return &config, nil
+}
+
+// installAgent installs the agent to run automatically at system startup.
+func installAgent(serverURL, joinKey string) error {
+	// Get home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Create installation directory
+	targetDir := filepath.Join(homeDir, installDir)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
+	}
+
+	// Get current executable path
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Copy executable to installation directory
+	targetPath := filepath.Join(targetDir, agentName)
+
+	// Check if we're already running from the target location
+	if exePath == targetPath {
+		fmt.Printf("Agent is already installed at %s\n", targetPath)
+		// Just need to ensure autostart is configured
+	} else {
+		// Stop any existing instance (but not ourselves)
+		// Note: We accept the TOCTOU risk here as it's a best-effort cleanup
+		if _, err := os.Stat(targetPath); err == nil {
+			// Use exec.Command directly to avoid shell injection
+			// The targetPath is safe (constructed from constants) but better to be explicit
+			cmd := exec.Command("pkill", "-f", targetPath) //nolint:noctx
+			_ = cmd.Run() //nolint:errcheck // Best effort
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		// Try direct copy first
+		if err := copyFile(exePath, targetPath); err != nil {
+			// Handle "text file busy" error by copying to temp and renaming
+			if !strings.Contains(strings.ToLower(err.Error()), "text file busy") {
+				return fmt.Errorf("failed to copy executable: %w", err)
+			}
+			
+			// Copy to temp file and rename
+			tempPath := targetPath + ".new"
+			if err := copyFile(exePath, tempPath); err != nil {
+				return fmt.Errorf("failed to copy executable to temp file: %w", err)
+			}
+			if err := os.Rename(tempPath, targetPath); err != nil {
+				_ = os.Remove(targetPath) //nolint:errcheck // Try removing old file
+				if err := os.Rename(tempPath, targetPath); err != nil {
+					return fmt.Errorf("failed to replace executable: %w", err)
+				}
+			}
+		}
+	}
+
+	// Make executable
+	if err := os.Chmod(targetPath, 0o755); err != nil {
+		return fmt.Errorf("failed to set executable permissions: %w", err)
+	}
+
+	// Save configuration file to proper config directory with restricted permissions
+	configDir, err := configDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	// Create config directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, configName)
+	config := AgentConfig{
+		ServerURL: serverURL,
+		JoinKey:   joinKey,
+	}
+	configData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	// Write config with 0600 permissions (readable only by owner)
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	// Install platform-specific autostart (without sensitive data in command line)
+	switch runtime.GOOS {
+	case "darwin":
+		return installMacOS(targetPath, serverURL, joinKey)
+	case "linux":
+		return installLinux(targetPath, serverURL, joinKey)
+	case "freebsd", "openbsd", "netbsd":
+		return installCron(targetPath, serverURL, joinKey)
+	default:
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+}
+
+// uninstallAgent removes the agent and autostart configuration.
+func uninstallAgent() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	targetDir := filepath.Join(homeDir, installDir)
+	targetPath := filepath.Join(targetDir, agentName)
+
+	// Remove platform-specific autostart
+	switch runtime.GOOS {
+	case "darwin":
+		if err := uninstallMacOS(); err != nil {
+			return err
+		}
+	case "linux":
+		if err := uninstallLinux(); err != nil {
+			return err
+		}
+	case "freebsd", "openbsd", "netbsd":
+		if err := uninstallCron(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	// Remove executable
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove executable: %w", err)
+	}
+
+	// Remove directory if empty
+	_ = os.Remove(targetDir) //nolint:errcheck // Directory might not be empty, that's OK
+
+	return nil
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o755)
+}
+
+// isSystemdUserAvailable checks if systemd user services are available and working.
+func isSystemdUserAvailable() bool {
+	// Check if systemctl exists
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+
+	// Check if systemd --user is running
+	cmd := exec.Command("systemctl", "--user", "is-system-running") //nolint:noctx // local command
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+
+	// Valid statuses indicate systemd is running
+	status := strings.TrimSpace(string(output))
+	switch status {
+	case "running", "degraded", "maintenance", "starting", "stopping":
+		return true
+	default:
+		return false
+	}
+}
+
+// installMacOS installs launchd plist for macOS.
+func installMacOS(agentPath, serverURL, joinKey string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	plistPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.gitmdm.agent.plist")
+
+	// Create LaunchAgents directory if it doesn't exist
+	launchAgentsDir := filepath.Join(homeDir, "Library", "LaunchAgents")
+	if err := os.MkdirAll(launchAgentsDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create LaunchAgents directory: %w", err)
+	}
+
+	plistContent := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gitmdm.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{.AgentPath}}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{.HomeDir}}/Library/Logs/gitmdm-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{.HomeDir}}/Library/Logs/gitmdm-agent.error.log</string>
+</dict>
+</plist>
+`
+
+	tmpl, err := template.New("plist").Parse(plistContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse plist template: %w", err)
+	}
+
+	file, err := os.Create(plistPath)
+	if err != nil {
+		return fmt.Errorf("failed to create plist file: %w", err)
+	}
+	defer func() { _ = file.Close() }() //nolint:errcheck // defer close
+
+	data := struct {
+		AgentPath string
+		ServerURL string
+		JoinKey   string
+		HomeDir   string
+	}{
+		AgentPath: agentPath,
+		ServerURL: serverURL,
+		JoinKey:   joinKey,
+		HomeDir:   homeDir,
+	}
+
+	if err := tmpl.Execute(file, data); err != nil {
+		return fmt.Errorf("failed to write plist: %w", err)
+	}
+
+	// Load the launch agent
+	cmd := exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try to unload first in case it's already loaded
+		_ = exec.Command("launchctl", "unload", plistPath).Run() //nolint:errcheck,noctx // Best effort
+		// Try loading again
+		cmd = exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
+		if output, err = cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to load launch agent: %w\nOutput: %s", err, output)
+		}
+	}
+
+	return nil
+}
+
+// uninstallMacOS removes launchd configuration.
+func uninstallMacOS() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	plistPath := filepath.Join(homeDir, "Library", "LaunchAgents", "com.gitmdm.agent.plist")
+
+	// Unload the launch agent
+	_ = exec.Command("launchctl", "unload", plistPath).Run() //nolint:errcheck,noctx // Best effort
+
+	// Remove plist file
+	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove plist: %w", err)
+	}
+
+	return nil
+}
+
+// installLinux installs systemd user service for Linux.
+func installLinux(agentPath, serverURL, joinKey string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	// Check if systemd is available AND user services are working
+	if !isSystemdUserAvailable() {
+		// Fall back to cron
+		fmt.Println("Systemd user services not available, using cron instead")
+		return installCron(agentPath, serverURL, joinKey)
+	}
+
+	serviceDir := filepath.Join(homeDir, ".config", "systemd", "user")
+	if err := os.MkdirAll(serviceDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create systemd directory: %w", err)
+	}
+
+	servicePath := filepath.Join(serviceDir, "gitmdm-agent.service")
+
+	serviceContent := `[Unit]
+Description=GitMDM Compliance Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{.AgentPath}}
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+`
+
+	tmpl, err := template.New("service").Parse(serviceContent)
+	if err != nil {
+		return fmt.Errorf("failed to parse service template: %w", err)
+	}
+
+	file, err := os.Create(servicePath)
+	if err != nil {
+		return fmt.Errorf("failed to create service file: %w", err)
+	}
+	defer func() { _ = file.Close() }() //nolint:errcheck // defer close
+
+	data := struct {
+		AgentPath string
+		ServerURL string
+		JoinKey   string
+	}{
+		AgentPath: agentPath,
+		ServerURL: serverURL,
+		JoinKey:   joinKey,
+	}
+
+	if err := tmpl.Execute(file, data); err != nil {
+		return fmt.Errorf("failed to write service file: %w", err)
+	}
+
+	// Reload systemd user daemon
+	cmd := exec.Command("systemctl", "--user", "daemon-reload") //nolint:noctx // local command
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %w", err)
+	}
+
+	// Enable service
+	cmd = exec.Command("systemctl", "--user", "enable", "gitmdm-agent.service") //nolint:noctx // local command
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to enable service: %w", err)
+	}
+
+	// Start service
+	cmd = exec.Command("systemctl", "--user", "start", "gitmdm-agent.service") //nolint:noctx // local command
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
+	}
+
+	return nil
+}
+
+// uninstallLinux removes systemd service or cron job.
+func uninstallLinux() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	// Try systemd first if user services are available
+	if isSystemdUserAvailable() {
+		// Stop service
+		_ = exec.Command("systemctl", "--user", "stop", "gitmdm-agent.service").Run() //nolint:errcheck,noctx // Best effort
+		// Disable service
+		_ = exec.Command("systemctl", "--user", "disable", "gitmdm-agent.service").Run() //nolint:errcheck,noctx // Best effort
+
+		// Remove service file
+		servicePath := filepath.Join(homeDir, ".config", "systemd", "user", "gitmdm-agent.service")
+		if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove service file: %w", err)
+		}
+
+		// Reload systemd
+		_ = exec.Command("systemctl", "--user", "daemon-reload").Run() //nolint:errcheck,noctx // Best effort
+	}
+
+	// Also try to remove from cron
+	_ = uninstallCron() //nolint:errcheck // Best effort
+
+	return nil
+}
+
+// installCron installs a cron job (fallback for systems without systemd/launchd).
+func installCron(agentPath, _, _ string) error {
+	// Check if crontab is available
+	if _, err := exec.LookPath("crontab"); err != nil {
+		return fmt.Errorf("neither systemd user services nor cron are available - manual startup required")
+	}
+
+	// Get current crontab
+	cmd := exec.Command("crontab", "-l") //nolint:noctx // local command
+	output, _ := cmd.Output()            //nolint:errcheck // Ignore error - no crontab is fine
+	currentCron := string(output)
+
+	// Check if already installed
+	if strings.Contains(currentCron, agentPath) {
+		return nil // Already installed
+	}
+
+	// Add new cron job (without sensitive data in command line)
+	newEntry := fmt.Sprintf("@reboot %s", agentPath)
+	newCron := currentCron
+	if !strings.HasSuffix(newCron, "\n") && newCron != "" {
+		newCron += "\n"
+	}
+	newCron += newEntry + "\n"
+
+	// Install new crontab
+	cmd = exec.Command("crontab", "-") //nolint:noctx // local command
+	cmd.Stdin = strings.NewReader(newCron)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to install crontab: %w", err)
+	}
+
+	// Try to start the agent immediately in background
+	// Security note: agentPath is constructed from filepath.Join with constants,
+	// but we use exec.Command directly to avoid shell injection risks
+	cmd = exec.Command(agentPath) //nolint:noctx
+	cmd.Stdin = nil
+	cmd.Stdout = nil 
+	cmd.Stderr = nil
+	if err := cmd.Start(); err == nil {
+		// Detach from the process
+		_ = cmd.Process.Release() //nolint:errcheck
+	}
+
+	return nil
+}
+
+// uninstallCron removes cron job.
+func uninstallCron() error {
+	// Get current crontab
+	cmd := exec.Command("crontab", "-l") //nolint:noctx // local command
+	output, err := cmd.Output()
+	if err != nil {
+		return nil //nolint:nilerr // No crontab, nothing to remove
+	}
+
+	currentCron := string(output)
+
+	// Remove gitmdm-agent entries
+	var newLines []string
+	for _, line := range strings.Split(currentCron, "\n") {
+		if !strings.Contains(line, "gitmdm-agent") {
+			newLines = append(newLines, line)
+		}
+	}
+
+	newCron := strings.Join(newLines, "\n")
+
+	// Install updated crontab
+	if strings.TrimSpace(newCron) == "" {
+		// Remove crontab entirely if empty
+		_ = exec.Command("crontab", "-r").Run() //nolint:errcheck,noctx // Best effort
+	} else {
+		cmd = exec.Command("crontab", "-") //nolint:noctx // local command
+		cmd.Stdin = strings.NewReader(newCron)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to update crontab: %w", err)
+		}
+	}
+
+	// Try to stop any running agent
+	_ = exec.Command("pkill", "-f", "gitmdm-agent").Run() //nolint:errcheck,noctx // Best effort
+
+	return nil
+}

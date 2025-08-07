@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Compliance Dashboard</title>
+    <title>gitMDM // Compliance Without the Backdoor</title>
+    <link rel="stylesheet" href="/static/style.css">
     <style>
         :root {
             --color-canvas-default: #ffffff;
@@ -415,8 +416,8 @@
     <div class="container">
         <!-- Page Header -->
         <header class="page-header">
-            <h1 class="page-title">Compliance Dashboard</h1>
-            <p class="page-subtitle">Monitor and track device compliance across your organization</p>
+            <h1 class="page-title">gitMDM Dashboard</h1>
+            <p class="page-subtitle">Compliance without the backdoors // {{.Total}} devices under watch</p>
         </header>
 
         <!-- Stats Overview -->
@@ -558,12 +559,16 @@
             <svg class="empty-state-icon" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5 6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"/>
             </svg>
-            <h2 class="empty-state-title">No Devices Found</h2>
+            <h2 class="empty-state-title">∅ Devices</h2>
             <p class="empty-state-description">
                 {{if .Search}}
-                    No devices match your search criteria. Try adjusting your filters or search terms.
+                    No devices match "<strong>{{.Search}}</strong>"<br>
+                    Your search-fu needs work.
                 {{else}}
-                    No devices have reported yet. Devices will appear here once agents start reporting compliance data.
+                    Zero devices reporting.<br>
+                    Did you forget to <code>--install</code> the agent?<br>
+                    <br>
+                    <code style="opacity: 0.5">./gitmdm-agent --install --server {{.ServerURL}} --join XXXX</code>
                 {{end}}
             </p>
         </div>

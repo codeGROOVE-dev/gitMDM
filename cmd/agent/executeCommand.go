@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// getSecurePath returns a secure PATH based on the OS.
-func getSecurePath() string {
+// securePath returns a secure PATH based on the OS.
+func securePath() string {
 	switch runtime.GOOS {
 	case "windows":
 		return "C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\wbem"
@@ -66,7 +66,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 		if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
 			// Temporarily set PATH for LookPath
 			oldPath := os.Getenv("PATH")
-			if err := os.Setenv("PATH", getSecurePath()); err != nil {
+			if err := os.Setenv("PATH", securePath()); err != nil {
 				log.Printf("[WARN] Failed to set PATH for command check: %v", err)
 			}
 			_, lookupErr := exec.LookPath(primaryCmd)
@@ -114,7 +114,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	}
 
 	// Set a secure, minimal PATH for the subprocess
-	securePath := getSecurePath()
+	securePath := securePath()
 	if *debug {
 		log.Printf("[DEBUG] Using secure PATH for %s: %s", runtime.GOOS, securePath)
 	}

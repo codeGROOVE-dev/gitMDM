@@ -280,7 +280,8 @@ func main() {
 	// Use Sub to get the static directory from the embedded filesystem
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		log.Fatalf("[ERROR] Failed to get static filesystem: %v", err)
+		cancel()
+		log.Fatalf("[ERROR] Failed to get static filesystem: %v", err) //nolint:gocritic // exitAfterDefer
 	}
 	staticHandler := http.FileServer(http.FS(staticFS))
 	mux.Handle("/static/", http.StripPrefix("/static/", staticHandler))
@@ -720,7 +721,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 	if len(report.User) > maxFieldLength {
 		s.incrementErrorCount()
 		log.Printf("[WARN] Username too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.User), maxFieldLength)
-		http.Error(writer, fmt.Sprintf("Username too long: %d bytes exceeds %d byte limit", len(report.User), maxFieldLength), http.StatusBadRequest)
+		http.Error(writer, "Username too long", http.StatusBadRequest)
 		return
 	}
 
@@ -729,7 +730,7 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		if len(name) > maxCheckName {
 			s.incrementErrorCount()
 			log.Printf("[WARN] Check name too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(name), maxCheckName)
-			http.Error(writer, fmt.Sprintf("Check name too long: %d bytes exceeds %d byte limit", len(name), maxCheckName), http.StatusBadRequest)
+			http.Error(writer, "Check name too long", http.StatusBadRequest)
 			return
 		}
 		// Additional validation: only allow safe characters in check names
@@ -890,8 +891,9 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("X-XSS-Protection", "1; mode=block")
 		writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		// Simplified CSP - only allow self-hosted scripts and styles
-		cspPolicy := "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+		// Strict CSP - only allow self-hosted resources
+		// Keep unsafe-inline for styles as templates use inline styles
+		cspPolicy := "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self'"
 		writer.Header().Set("Content-Security-Policy", cspPolicy)
 
 		start := time.Now()

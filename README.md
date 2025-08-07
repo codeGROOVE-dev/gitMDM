@@ -1,177 +1,157 @@
-# gitMDM
+# gitMDM 🧪
 
-Security-first compliance reporting that doesn't compromise your infrastructure.
+The MDM for startups that actually care about security.
 
-![gitMDM Logo](media/logo_small.png)
+## Your Problem
 
-## The Problem
+Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9. 
 
-Every MDM is a backdoor. They typically require root access and arbitrary remote code execution. They're incompatible with secure-by-default operating systems. Yet auditors require them for SOC 2.
+Traditional MDMs want root access, auto-update themselves from the internet, and can execute arbitrary code pushed from their cloud. Your security engineer just had an aneurysm.
 
-## The Solution
+## Our Solution
 
-gitMDM proves compliance without compromising security:
-- **No arbitrary remote code execution** - Checks are compiled into the agent binary
-- **No privileged access** - Runs as a normal user
-- **No phone-home** - Your git repo, your endpoint, your control
-- **Works everywhere** - Including secure-by-default systems such as OpenBSD.
-
-## Screenshots
-
-### Device List
-<a href="media/dashboard.png"><img src="media/dashboard.png" alt="Dashboard" width="400"/></a>
-
-### Device Details
-
-<a href="media/report.png"><img src="media/report.png" alt="Agent Report" width="400"/></a>
-
-### Remediation
-<a href="media/remediate.png"><img src="media/remediate.png" alt="Remediation Steps" width="400"/></a>
-
-## How It Works
+gitMDM proves compliance without the backdoor:
 
 ```
-[Agent]                    [Server]                   [Git]
-Run compiled checks  →  Receive reports only  → Tamper-resistant audit trail
+Traditional MDM: "Install our kernel extension!"
+Your Team: "How about no."
+
+gitMDM: "Run a read-only agent that reports to YOUR server"
+Your Team: "...continue"
 ```
 
-The server **cannot** push commands. Ever. That's the point.
+### Why Your Security Team Will Actually Approve This
 
-## Quick Start
+- **Zero Remote Execution**: Can't push commands. Not won't. Can't. The server only receives data.
+- **No Auto-Updates**: Agent is a static binary. Updates require YOU to rebuild and redeploy.
+- **Runs as User**: No root, no SYSTEM. Just a regular user process.
+- **You Own Everything**: Your server, your git repo, your data. Host it in your VPC.
+- **Audit Everything**: Every change is a git commit. `git blame` for compliance.
+
+## Quick Start for the Impatient
 
 ```bash
-# Server - now with 100% less git CLI dependency!
-# Auto-generates a join key from hardware ID if you're too lazy to set one
-./gitmdm-server -git /path/to/compliance  # Creates repo if it doesn't exist
-# or
-./gitmdm-server -clone /existing/repo      # Uses existing local repo
+# On your secure server (or laptop, we don't judge)
+./gitmdm-server -git /opt/compliance
 
-# The server will display something like:
-# ═══════════════════════════════════════════════════════════════
-# GitMDM Server Started
-# Join Key: 926DD23A5B
-# 
-# To register an agent, run:
-#   ./gitmdm-agent --server http://localhost:8080 --join 926DD23A5B
-# ═══════════════════════════════════════════════════════════════
+# On your OpenBSD machine
+$ doas pkg_add gitmdm-agent  # just kidding, compile it yourself
+$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 
-# Agent - checks in every 20 minutes (because 5 was too clingy)
-./gitmdm-agent --server http://localhost:8080 --join 926DD23A5B
+# On your Linux laptop  
+$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
+
+# On that Mac the designer insisted on
+$ ./gitmdm-agent --install --server https://comply.internal --join XXXX
 ```
 
-### Environment Variables (for the Docker crowd)
+Join keys stored in `~/.config/gitmdm/` (or wherever your OS says), not in process lists.
 
-```bash
-# Server accepts these if you're allergic to flags
-export GIT_REPO=git@github.com:org/compliance.git
-export PORT=8080
-export JOIN_KEY=SUPERSECRET123  # Or let it auto-generate one
-./gitmdm-server
-```
+## What SOC 2 Actually Requires vs What We Check
 
-## Local Checks
+| SOC 2 Says | Traditional MDMs Do | We Do |
+|------------|---------------------|--------|
+| Disk encryption | Run as root, phone home for instructions | Read `/proc/mounts` as user |
+| Screen locks | Auto-update from vendor's CDN | Check your screensaver config |
+| OS updates | Force reboots during demos | Report version numbers |
+| Firewall enabled | Execute arbitrary scripts from cloud | Check `iptables -L` output |
 
-You can run the compliance checks even without a server:
-
-```bash
-./out/gitmdm-agent -run all
-```
-
-You'll see output similar to:
-
-```log
-🔍 Running security checks...
-
-⚠️  3 issues require attention
-
-🔸 screen lock
-   🐞 Problem: Screen idle time too long (1 hour, SOC 2 requires ≤15 min); Screen lock delay too long (4 hours, SOC 2 requires ≤15 min)
-   💻 Evidence: defaults -currentHost read com.apple.screensaver idleTime && sysadminctl -screenLock status
-
-   🔧 How to fix:
-      1. Open System Settings > Lock Screen
-      2. Set 'Start Screen Saver when inactive' to 15 minutes or less
-      3. Open System Settings > Lock Screen
-      4. Set 'Require password after screen saver begins' to 'immediately'
-```
-
-## What You Get
-
-SOC 2 compliance evidence in git:
-```
-devices/
-├── 926DD23A5B/                    # Hardware IDs, not names (privacy!)
-│   ├── info.json                  # Device metadata
-│   ├── disk_encryption.json       ✓
-│   ├── screen_lock.json          ✓ 
-│   └── firewall.json             ✓
-└── README.md                      # Auto-created, unlike this one
-```
-
-Every check, every change, in git. No database to corrupt, no API to hack.
-
-## Supported Platforms
-
-Linux, macOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, Solaris, illumos
-
-## checks.yaml
+## Platform Detection That Actually Works
 
 ```yaml
-checks:
-  disk_encryption:
-    openbsd: "bioctl softraid0 | grep -q CRYPTO"
-    linux: "lsblk -o NAME,FSTYPE | grep -q crypto_LUKS"
-    darwin: "fdesetup status | grep -q 'On'"
+# Your snowflake setups, our problem:
+- MATE on OpenBSD (we see you)
+- Sway on Alpine (of course)  
+- i3 on Debian (classic)
+- Whatever that custom Wayland compositor you wrote is
+- Even macOS (unfortunate, but supported)
 ```
 
-Edit, compile, deploy. No runtime configuration files to tamper with.
+We detect 11+ desktop environments because your team refuses to standardize.
 
-## Security Guarantees
+## Security Architecture
 
-- **Server compromise = read-only access to compliance reports** (and they're in git anyway)
-- **No arbitrary code execution** - Not even with root on the server
-- **Agent decides what runs** - Compiled-in checks, not runtime shenanigans
-- **Bash restricted mode** - When we absolutely must shell out
-- **No git CLI required** - Pure Go implementation (go-git), works in containers
-- **Join key required** - Keeps the riffraff out of your compliance data
+```
+[Agent]           [Server]          [Git]
+   |                 |                |
+   |-- HTTPS ------->|                |
+   |   (reports)     |--- git push -->|
+   |                 |                |
+   X <-- CANNOT -----|                |
+       (execute)
+```
+
+The server literally cannot execute commands. We removed the code. It's not there.
+
+## For Your Compliance Team
+
+"How do we prove compliance?"
+
+```bash
+$ cd compliance-repo
+$ git log --oneline
+8f3d2a1 workstation-42: disk encryption enabled
+7b2c3f9 laptop-dev-3: screen lock fixed
+5a1e8c4 desktop-1: firewall enabled
+```
+
+"What if someone tampers with the agent?"
+
+They can. It's their machine. They can also lie on spreadsheets. At least this has timestamps.
+
+"Is this enterprise-ready?"
+
+No. But neither was Stripe when you started using it.
 
 ## Building
 
 ```bash
-make all
+make all  # Static binaries, because dynamic linking is attack surface
 ```
 
-Compiles to static binaries because dynamic linking is for people who enjoy debugging production at 3 AM.
+No npm. No pip. No containers. Just Go.
 
-## Code Philosophy
+## Installation That Respects Your OS
 
-Written in Go, blessed by Rob Pike's simplicity principles:
-- Functions read like recipes, not puzzle boxes
-- No clever abstractions that require a PhD to understand  
-- Minimal dependencies (yaml, retry, go-git - that's it!)
-- If a function is <7 lines and called once, it's inlined
-- Security through simplicity, not complexity theater
+- **Linux**: systemd user service (falls back to cron if you're systemd-free)
+- **OpenBSD**: cron (because rc.d requires root and we're not animals)
+- **macOS**: launchd (the least worst option)
+- **FreeBSD/NetBSD**: cron (see OpenBSD)
 
-## FAQ
+Pre-flight check ensures the server exists before installing. Novel concept.
 
-**Q: Is this SOC 2 compliant?**  
-A: It generates the reports auditors need. Without the backdoors.
+## FAQ for Security-Conscious Teams
 
-**Q: What if we need to change checks?**  
-A: Rebuild and redeploy. Immutability is a feature, not a bug.
+**Q: Can this execute remote commands?**  
+A: No. Check the code. The handler doesn't exist.
 
-**Q: Why git?**  
-A: Cryptographic proof, audit trail, existing tooling, no database to "accidentally" DROP.
+**Q: What about supply chain attacks?**  
+A: It's 2 dependencies: yaml and retry. Vendor them if paranoid.
 
-**Q: Does it need git installed?**  
-A: Nope! Uses go-git. Works in your hipster minimal container.
+**Q: Does it require root?**  
+A: Never. User-level only. Your kernel remains unmolested.
 
-**Q: What's a join key?**  
-A: A speed bump for script kiddies. Not Fort Knox, but keeps honest people honest.
+**Q: What data does it collect?**  
+A: Read `checks.yaml`. It's compiled in. No surprises.
 
-**Q: Why 20-minute check-ins?**  
-A: Because 5 minutes was needy, and daily was negligent. Goldilocks would approve.
+**Q: Can we self-host?**  
+A: That's the only option. There's no cloud service. You run it.
+
+**Q: What if an agent is compromised?**  
+A: It can lie about that device's compliance. That's it. No lateral movement.
+
+**Q: OpenBSD pledge/unveil support?**  
+A: On the roadmap. PRs welcome from fellow paranoids.
 
 ---
 
-*Built for organizations that refuse to compromise security for compliance.*
+*Built by engineers who rm -rf node_modules on principle.*
+
+**⚠️ EXPERIMENTAL**  
+*But still more trustworthy than your current MDM.*
+
+*Remember: Compliance theater is still theater, but at least our stage doesn't have backdoors.*
+
+---
+
+*"Because your security posture shouldn't require the missionary position."*

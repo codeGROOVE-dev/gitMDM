@@ -10,9 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"gitmdm/internal/analyzer"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 	"io"
 	"log"
 	"net/http"
@@ -25,6 +22,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"gitmdm/internal/analyzer"
+	"gitmdm/internal/config"
+	"gitmdm/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
 
@@ -69,6 +70,8 @@ var (
 	interval   = flag.Duration("interval", 20*time.Minute, "Polling interval")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	verbose    = flag.Bool("verbose", false, "Show all check outputs, not just failures (with --run all)")
+	install    = flag.Bool("install", false, "Install agent to run automatically at startup")
+	uninstall  = flag.Bool("uninstall", false, "Uninstall agent and remove autostart")
 	quiet      = false // Set to true to suppress INFO logs (used for interactive mode)
 )
 
@@ -124,6 +127,58 @@ func main() {
 		return
 	}
 
+	// Handle --install flag
+	if *install {
+		if *server == "" || *join == "" {
+			log.Fatal("--server and --join flags are required for installation")
+		}
+
+		// Set up agent configuration for verification
+		agent.serverURL = strings.TrimSuffix(*server, "/")
+		agent.joinKey = *join
+
+		// Verify server connection and join key by sending a test report
+		log.Println("Verifying server connection and join key...")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Run checks and attempt to report to server
+		report := gitmdm.DeviceReport{
+			HardwareID:    agent.hardwareID,
+			Hostname:      agent.hostname,
+			User:          agent.user,
+			Timestamp:     time.Now(),
+			Checks:        agent.runAllChecks(ctx),
+			SystemUptime:  agent.systemUptime(ctx),
+			CPULoad:       agent.cpuLoad(ctx),
+			LoggedInUsers: agent.loggedInUsers(ctx),
+		}
+
+		if err := agent.sendReport(ctx, report); err != nil {
+			cancel()
+			log.Fatalf("Failed to verify server connection: %v\nPlease check your --server and --join parameters", err) //nolint:gocritic // exitAfterDefer
+		}
+
+		log.Println("✓ Server connection verified successfully")
+		log.Printf("✓ Device registered as: %s (%s)", agent.hostname, agent.hardwareID)
+
+		// Now proceed with installation
+		if err := installAgent(*server, *join); err != nil {
+			log.Fatalf("Installation failed: %v", err)
+		}
+		log.Println("✓ Agent installed successfully and will run automatically at startup")
+		return
+	}
+
+	// Handle --uninstall flag
+	if *uninstall {
+		if err := uninstallAgent(); err != nil {
+			log.Fatalf("Uninstallation failed: %v", err)
+		}
+		log.Println("Agent uninstalled successfully")
+		return
+	}
+
 	// Handle --run flag
 	if *runCheck != "" {
 		if *runCheck == "all" {
@@ -142,12 +197,26 @@ func main() {
 		return
 	}
 
-	if *server == "" {
-		log.Fatal("Server URL is required (use --server flag)")
-	}
-
-	if *join == "" {
-		log.Fatal("Join key is required when using --server (use --join flag)")
+	// Try to load config file if server/join not provided via flags
+	if *server == "" || *join == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			// Config file doesn't exist or is invalid
+			if *server == "" {
+				log.Fatal("Server URL is required (use --server flag or install agent with --install)")
+			}
+			if *join == "" {
+				log.Fatal("Join key is required (use --join flag or install agent with --install)")
+			}
+		} else {
+			// Use config file values if flags not provided
+			if *server == "" {
+				*server = cfg.ServerURL
+			}
+			if *join == "" {
+				*join = cfg.JoinKey
+			}
+		}
 	}
 
 	agent.serverURL = strings.TrimSuffix(*server, "/")

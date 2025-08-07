@@ -524,9 +524,10 @@
                         <div class="detail-section">
                             <div class="detail-section-title">Technical Details</div>
                             {{if eq $result.Status "fail"}}
-                                {{/* For failed checks, only show the command that actually failed */}}
+                                {{/* For failed checks, show commands that contributed to the failure */}}
                                 {{range $output := $check.Outputs}}
-                                    {{if and (ne $output.ExitCode 0) (ne $output.ExitCode -2)}}
+                                    {{/* Show if: command failed (non-zero exit) OR had meaningful output */}}
+                                    {{if or (and (ne $output.ExitCode 0) (ne $output.ExitCode -2)) $output.Stdout}}
                                         {{if or $output.Command $output.File}}
                                         <div class="command-block">
                                             <span class="command-prompt">$</span> 
@@ -534,15 +535,34 @@
                                         </div>
                                         {{end}}
                                         {{if $output.Stdout}}
-                                        <div class="output-block">{{truncateLines $output.Stdout 30}}</div>
+                                        <div class="output-block">{{$output.Stdout}}</div>
                                         {{end}}
                                         {{if $output.Stderr}}
-                                        <div class="output-block error">{{truncateLines $output.Stderr 10}}</div>
+                                        <div class="output-block error">{{$output.Stderr}}</div>
+                                        {{end}}
+                                    {{end}}
+                                {{end}}
+                            {{else if eq $result.Status "pass"}}
+                                {{/* For passed checks, show commands that had output (contributed to pass) */}}
+                                {{range $output := $check.Outputs}}
+                                    {{/* Only show commands that had meaningful output */}}
+                                    {{if or $output.Stdout (and (eq $output.ExitCode 0) $output.File)}}
+                                        {{if or $output.Command $output.File}}
+                                        <div class="command-block">
+                                            <span class="command-prompt">$</span> 
+                                            {{if $output.Command}}{{$output.Command}}{{else}}cat {{$output.File}}{{end}}
+                                        </div>
+                                        {{end}}
+                                        {{if $output.Stdout}}
+                                        <div class="output-block">{{$output.Stdout}}</div>
+                                        {{end}}
+                                        {{if $output.Stderr}}
+                                        <div class="output-block error">{{$output.Stderr}}</div>
                                         {{end}}
                                     {{end}}
                                 {{end}}
                             {{else}}
-                                {{/* For non-failed checks, show all outputs */}}
+                                {{/* For n/a checks, show all outputs for informational purposes */}}
                                 {{range $output := $check.Outputs}}
                                     {{if or $output.Command $output.File}}
                                     <div class="command-block">
@@ -551,13 +571,13 @@
                                     </div>
                                     {{end}}
                                     {{if $output.Stdout}}
-                                    <div class="output-block">{{truncateLines $output.Stdout 30}}</div>
+                                    <div class="output-block">{{$output.Stdout}}</div>
                                     {{end}}
                                     {{if $output.Stderr}}
                                         {{if and (eq $output.ExitCode -2) (contains $output.Stderr "Skipped:")}}
                                         <div class="output-block" style="color: var(--color-fg-muted); font-style: italic;">{{$output.Stderr}}</div>
                                         {{else}}
-                                        <div class="output-block error">{{truncateLines $output.Stderr 10}}</div>
+                                        <div class="output-block error">{{$output.Stderr}}</div>
                                         {{end}}
                                     {{end}}
                                 {{end}}

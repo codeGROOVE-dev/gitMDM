@@ -110,12 +110,14 @@ checks:
   firewall:
     description: "Verify system firewall is enabled"
     darwin:
+      # macOS Application Firewall provides sufficient protection for compliance
       - output: /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
         includes: "disabled|off"
         remediation:
-          - Enable the firewall
+          - Enable the Application Firewall for network protection
           - Go to System Preferences > Security & Privacy > Firewall
           - Click "Turn On Firewall"
+          - Note: This enables the application-layer firewall which is sufficient for security compliance
     linux:
       - output: ufw status
         includes: "Status: inactive"
@@ -130,33 +132,57 @@ checks:
         remediation:
           - Configure iptables rules for basic protection
     freebsd:
-      # Try sudo first, then doas
-      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null
-        includes: "Status: Disabled"
+      # Try sudo first, then doas, then direct access
+      - output: (sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
+        includes: "Disabled"
         remediation:
-          - Enable PF firewall with 'sudo pfctl -e'
-          - Configure /etc/pf.conf
+          - Enable PF firewall with 'sudo pfctl -e' or 'doas pfctl -e'
+          - Configure /etc/pf.conf with appropriate rules
           - Add pf_enable="YES" to /etc/rc.conf
-    openbsd:
-      # OpenBSD primarily uses doas
-      - output: doas pfctl -s info
-        includes: "Status: Disabled"
+          - Start with 'service pf start'
+      # Also check if PF is even loaded in the kernel
+      - output: kldstat | grep -q pf.ko && echo "loaded" || echo "not loaded"
+        includes: "not loaded"
         remediation:
-          - Enable PF firewall with 'doas pfctl -e'
-          - Configure /etc/pf.conf
+          - Load PF kernel module with 'sudo kldload pf'
+          - Add pf_load="YES" to /boot/loader.conf for persistence
+      # Check if ipfw is being used instead of pf
+      - output: (sudo ipfw list 2>/dev/null || doas ipfw list 2>/dev/null || ipfw list 2>/dev/null) | head -1
+        excludes: "00001|65535"
+        remediation:
+          - IPFW firewall appears to be inactive or not configured
+          - Add firewall rules with 'ipfw add' commands
+          - Configure /etc/rc.conf with firewall_enable="YES"
+    openbsd:
+      # OpenBSD has PF enabled by default, check if it's actually filtering
+      - output: (doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
+        includes: "Disabled"
+        remediation:
+          - Enable PF firewall with 'doas pfctl -e' or 'pfctl -e'
+          - Configure /etc/pf.conf with appropriate rules
+          - PF is typically enabled by default on OpenBSD
+      # Check if there are any actual rules loaded
+      - output: (doas pfctl -sr 2>/dev/null || pfctl -sr 2>/dev/null) | wc -l
+        includes: "^0$"
+        remediation:
+          - No PF rules are loaded
+          - Configure firewall rules in /etc/pf.conf
+          - Load rules with 'doas pfctl -f /etc/pf.conf'
     netbsd:
-      - output: sudo npfctl show 2>/dev/null || npfctl show
-        includes: "inactive"
+      - output: (sudo npfctl show 2>/dev/null || doas npfctl show 2>/dev/null || npfctl show 2>/dev/null) | grep -i config
+        includes: "inactive|empty"
         remediation:
           - Enable NPF firewall
-          - Configure /etc/npf.conf
+          - Configure /etc/npf.conf with firewall rules
           - Add npf=YES to /etc/rc.conf
+          - Start with 'service npf start'
     dragonfly:
-      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null
-        includes: "Status: Disabled"
+      - output: (sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
+        includes: "Disabled"
         remediation:
-          - Enable PF firewall with 'sudo pfctl -e'
-          - Configure /etc/pf.conf
+          - Enable PF firewall with 'sudo pfctl -e' or 'doas pfctl -e'
+          - Configure /etc/pf.conf with appropriate rules
+          - Add pf_enable="YES" to /etc/rc.conf
     illumos:
       - output: ipfstat -io
         includes: "empty list"

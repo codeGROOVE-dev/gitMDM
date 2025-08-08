@@ -15,6 +15,7 @@ import (
 	"gitmdm/internal/gitmdm"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -34,6 +35,14 @@ import (
 const (
 	// Command execution timeout.
 	commandTimeout = 10 * time.Second
+
+	// OS constants.
+	osWindows = "windows"
+	osDarwin  = "darwin"
+	osLinux   = "linux"
+
+	// Windows command constants.
+	wmicCmd = "wmic"
 	// Maximum output size to prevent memory exhaustion.
 	maxOutputSize = 92160 // 90KB limit (matching server)
 	// Maximum log output length for readability.
@@ -156,10 +165,39 @@ func main() {
 			LoggedInUsers: agent.loggedInUsers(ctx),
 		}
 
-		if err := agent.sendReport(ctx, report); err != nil {
+		// Retry the verification with exponential backoff
+		var lastErr error
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			if attempt > 0 {
+				backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt-1)))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				log.Printf("[INFO] Retrying verification (attempt %d/%d) after %v...", attempt, maxRetries, backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					cancel()
+					//nolint:gocritic,lll // exitAfterDefer
+					log.Fatalf("Verification cancelled: %v", ctx.Err())
+				}
+			}
+
+			if err := agent.sendReport(ctx, report); err != nil {
+				lastErr = err
+				log.Printf("[WARN] Verification attempt %d failed: %v", attempt+1, err)
+				continue
+			}
+			// Success!
+			lastErr = nil
+			break
+		}
+
+		if lastErr != nil {
 			cancel()
-			//nolint:gocritic,lll // exitAfterDefer
-			log.Fatalf("Failed to verify server connection: %v\nPlease check your --server and --join parameters", err)
+			//nolint:lll // exitAfterDefer
+			log.Fatalf("Failed to verify server connection after %d attempts: %v\n"+
+				"Please check your --server and --join parameters", maxRetries+1, lastErr)
 		}
 
 		log.Println("✓ Server connection verified successfully")
@@ -550,8 +588,8 @@ func (*Agent) systemUptime(ctx context.Context) string {
 		cmd = exec.CommandContext(ctx, "uptime")
 	case "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "uptime")
-	case "windows":
-		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "lastbootuptime")
+	case osWindows:
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "lastbootuptime")
 	default:
 		return "unsupported"
 	}
@@ -568,14 +606,14 @@ func (*Agent) cpuLoad(ctx context.Context) string {
 
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "linux":
+	case osLinux:
 		cmd = exec.CommandContext(ctx, "cat", "/proc/loadavg")
 	case "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
 		cmd = exec.CommandContext(ctx, "sysctl", "-n", "vm.loadavg")
 	case "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "uptime")
-	case "windows":
-		cmd = exec.CommandContext(ctx, "wmic", "cpu", "get", "loadpercentage")
+	case osWindows:
+		cmd = exec.CommandContext(ctx, wmicCmd, "cpu", "get", "loadpercentage")
 	default:
 		return "unsupported"
 	}
@@ -583,7 +621,7 @@ func (*Agent) cpuLoad(ctx context.Context) string {
 	if output, err := cmd.Output(); err == nil {
 		result := strings.TrimSpace(string(output))
 		// For Linux /proc/loadavg, extract just the three load averages
-		if runtime.GOOS == "linux" {
+		if runtime.GOOS == osLinux {
 			fields := strings.Fields(result)
 			if len(fields) >= 3 {
 				result = strings.Join(fields[:3], " ")
@@ -609,8 +647,8 @@ func (*Agent) loggedInUsers(ctx context.Context) string {
 	switch runtime.GOOS {
 	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "who")
-	case "windows":
-		cmd = exec.CommandContext(ctx, "wmic", "computersystem", "get", "username")
+	case osWindows:
+		cmd = exec.CommandContext(ctx, wmicCmd, "computersystem", "get", "username")
 	default:
 		return "unsupported"
 	}
@@ -618,7 +656,7 @@ func (*Agent) loggedInUsers(ctx context.Context) string {
 	if output, err := cmd.Output(); err == nil {
 		result := strings.TrimSpace(string(output))
 		// Count unique users for Unix-like systems
-		if runtime.GOOS != "windows" {
+		if runtime.GOOS != osWindows {
 			lines := strings.Split(result, "\n")
 			userMap := make(map[string]bool)
 			for _, line := range lines {
@@ -646,7 +684,7 @@ func (*Agent) osInfo(ctx context.Context) string {
 	defer cancel()
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "linux":
+	case osLinux:
 		// Try to get pretty name from os-release
 		if data, err := os.ReadFile("/etc/os-release"); err == nil {
 			lines := strings.Split(string(data), "\n")
@@ -659,17 +697,17 @@ func (*Agent) osInfo(ctx context.Context) string {
 		}
 		// Fallback to uname
 		cmd = exec.CommandContext(ctx, "uname", "-s")
-	case "darwin":
+	case osDarwin:
 		cmd = exec.CommandContext(ctx, "sw_vers", "-productName")
-	case "windows":
-		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "Caption", "/value")
+	case osWindows:
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "Caption", "/value")
 	default:
 		cmd = exec.CommandContext(ctx, "uname", "-s")
 	}
 	if cmd != nil {
 		if output, err := cmd.Output(); err == nil {
 			result := strings.TrimSpace(string(output))
-			if runtime.GOOS == "windows" && strings.Contains(result, "Caption=") {
+			if runtime.GOOS == osWindows && strings.Contains(result, "Caption=") {
 				result = strings.TrimPrefix(result, "Caption=")
 			}
 			if result != "" {
@@ -691,18 +729,18 @@ func (*Agent) osVersion(ctx context.Context) string {
 	defer cancel()
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "linux":
+	case osLinux:
 		cmd = exec.CommandContext(ctx, "uname", "-r")
-	case "darwin":
+	case osDarwin:
 		cmd = exec.CommandContext(ctx, "sw_vers", "-productVersion")
-	case "windows":
-		cmd = exec.CommandContext(ctx, "wmic", "os", "get", "Version", "/value")
+	case osWindows:
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "Version", "/value")
 	default:
 		cmd = exec.CommandContext(ctx, "uname", "-r")
 	}
 	if output, err := cmd.Output(); err == nil {
 		result := strings.TrimSpace(string(output))
-		if runtime.GOOS == "windows" && strings.Contains(result, "Version=") {
+		if runtime.GOOS == osWindows && strings.Contains(result, "Version=") {
 			result = strings.TrimPrefix(result, "Version=")
 		}
 		if result != "" {
@@ -827,7 +865,7 @@ func illumosHardwareID() string {
 func windowsHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "wmic", "csproduct", "get", "UUID")
+	cmd := exec.CommandContext(ctx, wmicCmd, "csproduct", "get", "UUID")
 	output, err := cmd.Output()
 	if err != nil {
 		if *debug {
@@ -857,9 +895,9 @@ func hardwareID() string {
 
 	var id string
 	switch runtime.GOOS {
-	case "darwin":
+	case osDarwin:
 		id = darwinHardwareID()
-	case "linux":
+	case osLinux:
 		id = linuxHardwareID()
 	case "freebsd", "openbsd", "netbsd", "dragonfly":
 		id = bsdHardwareID()
@@ -867,7 +905,7 @@ func hardwareID() string {
 		id = solarisHardwareID()
 	case "illumos":
 		id = illumosHardwareID()
-	case "windows":
+	case osWindows:
 		id = windowsHardwareID()
 	default:
 		if *debug {
@@ -1218,7 +1256,7 @@ func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []stri
 				}
 				printLine("[Command %d of %d - %s]", i+1, len(result.Outputs), status)
 			}
-			
+
 			if output.Command != "" {
 				printLine("Command: %s", output.Command)
 			} else if output.File != "" {

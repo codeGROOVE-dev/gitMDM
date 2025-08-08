@@ -1,6 +1,12 @@
 // Package config defines configuration structures for gitMDM checks.
 package config
 
+import (
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
 // Config represents the complete checks configuration.
 type Config struct {
 	Checks map[string]CheckDefinition `yaml:"checks"`
@@ -9,18 +15,70 @@ type Config struct {
 // CheckDefinition defines how a check should be performed across different platforms.
 // Field names follow Go build tag conventions.
 type CheckDefinition struct {
-	Description string        `yaml:"description,omitempty"`
-	All         []CommandRule `yaml:"all,omitempty"`
-	Unix        []CommandRule `yaml:"unix,omitempty"`      // All Unix-like systems (not Windows)
-	Darwin      []CommandRule `yaml:"darwin,omitempty"`    // macOS
-	Linux       []CommandRule `yaml:"linux,omitempty"`     // Linux
-	Windows     []CommandRule `yaml:"windows,omitempty"`   // Windows
-	FreeBSD     []CommandRule `yaml:"freebsd,omitempty"`   // FreeBSD
-	OpenBSD     []CommandRule `yaml:"openbsd,omitempty"`   // OpenBSD
-	NetBSD      []CommandRule `yaml:"netbsd,omitempty"`    // NetBSD
-	Dragonfly   []CommandRule `yaml:"dragonfly,omitempty"` // DragonflyBSD (Go uses "dragonfly")
-	Solaris     []CommandRule `yaml:"solaris,omitempty"`   // Solaris/OpenSolaris
-	Illumos     []CommandRule `yaml:"illumos,omitempty"`   // Illumos
+	additionalRules map[string][]CommandRule
+	Description     string        `yaml:"description,omitempty"`
+	FreeBSD         []CommandRule `yaml:"freebsd,omitempty"`
+	Darwin          []CommandRule `yaml:"darwin,omitempty"`
+	Linux           []CommandRule `yaml:"linux,omitempty"`
+	Windows         []CommandRule `yaml:"windows,omitempty"`
+	Unix            []CommandRule `yaml:"unix,omitempty"`
+	OpenBSD         []CommandRule `yaml:"openbsd,omitempty"`
+	NetBSD          []CommandRule `yaml:"netbsd,omitempty"`
+	Dragonfly       []CommandRule `yaml:"dragonfly,omitempty"`
+	Solaris         []CommandRule `yaml:"solaris,omitempty"`
+	Illumos         []CommandRule `yaml:"illumos,omitempty"`
+	All             []CommandRule `yaml:"all,omitempty"`
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling to support comma-separated OS keys.
+func (cd *CheckDefinition) UnmarshalYAML(node *yaml.Node) error {
+	// Create a temporary type to avoid recursion
+	type checkDefAlias CheckDefinition
+
+	// First unmarshal into a map to handle dynamic keys
+	var raw map[string]any
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+
+	// Initialize the additional rules map
+	cd.additionalRules = make(map[string][]CommandRule)
+
+	// Process each key-value pair
+	for key, value := range raw {
+		// Check if the key contains a comma (multi-OS specification)
+		if !strings.Contains(key, ",") {
+			continue
+		}
+
+		// Parse the command rules for this multi-OS key
+		yamlBytes, err := yaml.Marshal(value)
+		if err != nil {
+			continue
+		}
+		var rules []CommandRule
+		if err := yaml.Unmarshal(yamlBytes, &rules); err != nil {
+			continue
+		}
+
+		// Split the key and store rules for each OS
+		osNames := strings.Split(key, ",")
+		for _, osName := range osNames {
+			osName = strings.TrimSpace(osName)
+			cd.additionalRules[osName] = rules
+		}
+
+		// Remove from raw map so it doesn't interfere with standard unmarshaling
+		delete(raw, key)
+	}
+
+	// Marshal the cleaned map back to YAML and unmarshal into the struct
+	cleanedYAML, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+
+	return yaml.Unmarshal(cleanedYAML, (*checkDefAlias)(cd))
 }
 
 // CommandRule defines a single command or file check with evaluation criteria.
@@ -46,7 +104,14 @@ type CommandRule struct {
 
 // CommandsForOS returns the command rules for a specific OS.
 func (cd *CheckDefinition) CommandsForOS(osName string) []CommandRule {
-	// Check exact OS match first
+	// First check if there are rules from comma-separated OS specifications
+	if cd.additionalRules != nil {
+		if rules, exists := cd.additionalRules[osName]; exists && len(rules) > 0 {
+			return rules
+		}
+	}
+
+	// Check exact OS match
 	switch osName {
 	case "darwin":
 		if len(cd.Darwin) > 0 {

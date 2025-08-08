@@ -26,6 +26,14 @@ checks:
           - Enable full disk encryption using LUKS
           - Run 'sudo cryptsetup luksFormat /dev/sdX' for each unencrypted partition
           - Update /etc/crypttab and /etc/fstab accordingly
+      # Check for ZFS root encryption (zroot is common on Linux with ZFS)
+      - output: sudo zfs get -H encryption zroot 2>/dev/null || doas zfs get -H encryption zroot 2>/dev/null || zfs get -H encryption zroot 2>/dev/null
+        includes: "zroot.*encryption.*off"
+        remediation:
+          - ZFS root pool is not encrypted
+          - Create an encrypted ZFS dataset or migrate to an encrypted pool
+          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase zroot ..."
+          - Note that existing pools cannot be encrypted in-place
     darwin:
       - output: fdesetup status
         includes: "FileVault is Off|Encryption Not Enabled"
@@ -40,6 +48,14 @@ checks:
           - Enable GELI disk encryption
           - See FreeBSD Handbook chapter on disk encryption
           - Use 'geli init' to initialize encrypted providers
+      # Check for ZFS root encryption (zroot is common on FreeBSD)
+      - output: sudo zfs get -H encryption zroot 2>/dev/null || doas zfs get -H encryption zroot 2>/dev/null || zfs get -H encryption zroot 2>/dev/null
+        includes: "zroot.*encryption.*off"
+        remediation:
+          - ZFS root pool is not encrypted
+          - Create an encrypted ZFS dataset or migrate to an encrypted pool
+          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase zroot ..."
+          - Note that existing pools cannot be encrypted in-place
     openbsd:
       - output: doas bioctl softraid0
         includes: "No such device|not configured"
@@ -54,19 +70,19 @@ checks:
           - Enable CGD (CryptoGraphic Disk) encryption
           - Configure /etc/cgd/cgd.conf
           - See NetBSD guide on CGD configuration
-    linux, freebsd:
-      # Check for ZFS root encryption (zroot is common on FreeBSD and Linux)
-      - output: (sudo zfs get -H encryption zroot 2>/dev/null || doas zfs get -H encryption zroot 2>/dev/null || zfs get -H encryption zroot 2>/dev/null) | awk '{print $3}'
-        includes: "^off$"
+    solaris:
+      # Check for ZFS root encryption (rpool is standard on Solaris)
+      - output: sudo zfs get -H encryption rpool 2>/dev/null || doas zfs get -H encryption rpool 2>/dev/null || zfs get -H encryption rpool 2>/dev/null
+        includes: "rpool.*encryption.*off"
         remediation:
           - ZFS root pool is not encrypted
           - Create an encrypted ZFS dataset or migrate to an encrypted pool
-          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase zroot ..."
+          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase rpool ..."
           - Note that existing pools cannot be encrypted in-place
-    solaris, illumos:
-      # Check for ZFS root encryption (rpool is standard on Solaris/illumos)
-      - output: (sudo zfs get -H encryption rpool 2>/dev/null || doas zfs get -H encryption rpool 2>/dev/null || zfs get -H encryption rpool 2>/dev/null) | awk '{print $3}'
-        includes: "^off$"
+    illumos:
+      # Check for ZFS root encryption (rpool is standard on illumos)
+      - output: sudo zfs get -H encryption rpool 2>/dev/null || doas zfs get -H encryption rpool 2>/dev/null || zfs get -H encryption rpool 2>/dev/null
+        includes: "rpool.*encryption.*off"
         remediation:
           - ZFS root pool is not encrypted
           - Create an encrypted ZFS dataset or migrate to an encrypted pool
@@ -133,21 +149,21 @@ checks:
           - Configure iptables rules for basic protection
     freebsd:
       # Try sudo first, then doas, then direct access
-      - output: (sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
-        includes: "Disabled"
+      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null
+        includes: "Status:.*Disabled"
         remediation:
           - Enable PF firewall with 'sudo pfctl -e' or 'doas pfctl -e'
           - Configure /etc/pf.conf with appropriate rules
           - Add pf_enable="YES" to /etc/rc.conf
           - Start with 'service pf start'
       # Also check if PF is even loaded in the kernel
-      - output: kldstat | grep -q pf.ko && echo "loaded" || echo "not loaded"
-        includes: "not loaded"
+      - output: kldstat
+        excludes: "pf\\.ko"
         remediation:
           - Load PF kernel module with 'sudo kldload pf'
           - Add pf_load="YES" to /boot/loader.conf for persistence
       # Check if ipfw is being used instead of pf
-      - output: (sudo ipfw list 2>/dev/null || doas ipfw list 2>/dev/null || ipfw list 2>/dev/null) | head -1
+      - output: sudo ipfw list 2>/dev/null || doas ipfw list 2>/dev/null || ipfw list 2>/dev/null
         excludes: "00001|65535"
         remediation:
           - IPFW firewall appears to be inactive or not configured
@@ -155,8 +171,8 @@ checks:
           - Configure /etc/rc.conf with firewall_enable="YES"
     openbsd:
       # OpenBSD has PF enabled by default, check if it's actually filtering
-      - output: (doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
-        includes: "Disabled"
+      - output: doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null
+        includes: "Status:.*Disabled"
         remediation:
           - Enable PF firewall with 'doas pfctl -e' or 'pfctl -e'
           - Configure /etc/pf.conf with appropriate rules
@@ -169,7 +185,7 @@ checks:
           - Configure firewall rules in /etc/pf.conf
           - Load rules with 'doas pfctl -f /etc/pf.conf'
     netbsd:
-      - output: (sudo npfctl show 2>/dev/null || doas npfctl show 2>/dev/null || npfctl show 2>/dev/null) | grep -i config
+      - output: sudo npfctl show 2>/dev/null || doas npfctl show 2>/dev/null || npfctl show 2>/dev/null
         includes: "inactive|empty"
         remediation:
           - Enable NPF firewall
@@ -177,8 +193,8 @@ checks:
           - Add npf=YES to /etc/rc.conf
           - Start with 'service npf start'
     dragonfly:
-      - output: (sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null) | grep -i status
-        includes: "Disabled"
+      - output: sudo pfctl -s info 2>/dev/null || doas pfctl -s info 2>/dev/null || pfctl -s info 2>/dev/null
+        includes: "Status:.*Disabled"
         remediation:
           - Enable PF firewall with 'sudo pfctl -e' or 'doas pfctl -e'
           - Configure /etc/pf.conf with appropriate rules
@@ -597,7 +613,7 @@ checks:
   antivirus:
     description: "Detect antivirus/anti-malware software"
     darwin:
-      - output: system_profiler SPInstallHistoryDataType | grep -i "xprotect\|malware"
+      - output: system_profiler SPInstallHistoryDataType
         excludes: "XProtect|MRT"
         remediation:
           - macOS includes built-in XProtect antivirus

@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
-
 	"gopkg.in/yaml.v3"
 )
 
@@ -964,7 +963,7 @@ func (a *Agent) listAvailableChecks() {
 	// Display checks with descriptions from YAML
 	for _, checkName := range availableChecks {
 		checkDef := a.config.Checks[checkName]
-		description := checkDef.Description
+		description := checkDef.Description()
 		if description == "" {
 			description = "Compliance check"
 		}

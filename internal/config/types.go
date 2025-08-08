@@ -3,8 +3,6 @@ package config
 
 import (
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Config represents the complete checks configuration.
@@ -12,74 +10,14 @@ type Config struct {
 	Checks map[string]CheckDefinition `yaml:"checks"`
 }
 
-// CheckDefinition defines how a check should be performed across different platforms.
-// Field names follow Go build tag conventions.
-type CheckDefinition struct {
-	additionalRules map[string][]CommandRule
-	Description     string        `yaml:"description,omitempty"`
-	FreeBSD         []CommandRule `yaml:"freebsd,omitempty"`
-	Darwin          []CommandRule `yaml:"darwin,omitempty"`
-	Linux           []CommandRule `yaml:"linux,omitempty"`
-	Windows         []CommandRule `yaml:"windows,omitempty"`
-	Unix            []CommandRule `yaml:"unix,omitempty"`
-	OpenBSD         []CommandRule `yaml:"openbsd,omitempty"`
-	NetBSD          []CommandRule `yaml:"netbsd,omitempty"`
-	Dragonfly       []CommandRule `yaml:"dragonfly,omitempty"`
-	Solaris         []CommandRule `yaml:"solaris,omitempty"`
-	Illumos         []CommandRule `yaml:"illumos,omitempty"`
-	All             []CommandRule `yaml:"all,omitempty"`
-}
-
-// UnmarshalYAML implements custom YAML unmarshaling to support comma-separated OS keys.
-func (cd *CheckDefinition) UnmarshalYAML(node *yaml.Node) error {
-	// Create a temporary type to avoid recursion
-	type checkDefAlias CheckDefinition
-
-	// First unmarshal into a map to handle dynamic keys
-	var raw map[string]any
-	if err := node.Decode(&raw); err != nil {
-		return err
-	}
-
-	// Initialize the additional rules map
-	cd.additionalRules = make(map[string][]CommandRule)
-
-	// Process each key-value pair
-	for key, value := range raw {
-		// Check if the key contains a comma (multi-OS specification)
-		if !strings.Contains(key, ",") {
-			continue
-		}
-
-		// Parse the command rules for this multi-OS key
-		yamlBytes, err := yaml.Marshal(value)
-		if err != nil {
-			continue
-		}
-		var rules []CommandRule
-		if err := yaml.Unmarshal(yamlBytes, &rules); err != nil {
-			continue
-		}
-
-		// Split the key and store rules for each OS
-		osNames := strings.Split(key, ",")
-		for _, osName := range osNames {
-			osName = strings.TrimSpace(osName)
-			cd.additionalRules[osName] = rules
-		}
-
-		// Remove from raw map so it doesn't interfere with standard unmarshaling
-		delete(raw, key)
-	}
-
-	// Marshal the cleaned map back to YAML and unmarshal into the struct
-	cleanedYAML, err := yaml.Marshal(raw)
-	if err != nil {
-		return err
-	}
-
-	return yaml.Unmarshal(cleanedYAML, (*checkDefAlias)(cd))
-}
+// CheckDefinition is just a map of OS names to command rules.
+// The key can be:
+// - "description" for the check description
+// - An OS name like "linux", "darwin", "windows"
+// - A comma-separated list like "linux,freebsd"
+// - "unix" for all Unix-like systems
+// - "all" for all systems.
+type CheckDefinition map[string]interface{}
 
 // CommandRule defines a single command or file check with evaluation criteria.
 type CommandRule struct {
@@ -96,72 +34,141 @@ type CommandRule struct {
 	Remediation []string `yaml:"remediation,omitempty"`
 }
 
-// CommandsForOS returns the commands for a specific OS, handling inheritance.
-// Priority order (similar to Go build tags):
-// 1. Exact OS match (e.g., "freebsd")
-// 2. Unix (for all Unix-like systems)
-// 3. All (works on any OS).
+// Description returns the description for this check.
+func (cd CheckDefinition) Description() string {
+	if desc, ok := cd["description"].(string); ok {
+		return desc
+	}
+	return ""
+}
 
 // CommandsForOS returns the command rules for a specific OS.
-func (cd *CheckDefinition) CommandsForOS(osName string) []CommandRule {
-	// First check if there are rules from comma-separated OS specifications
-	if cd.additionalRules != nil {
-		if rules, exists := cd.additionalRules[osName]; exists && len(rules) > 0 {
+// Priority order:
+// 1. Exact OS match (e.g., "freebsd")
+// 2. Comma-separated match (e.g., "linux,freebsd")
+// 3. Unix (for all Unix-like systems)
+// 4. All (works on any OS).
+func (cd CheckDefinition) CommandsForOS(osName string) []CommandRule {
+	// Try exact match first
+	if rules := cd.parseRules(osName); rules != nil {
+		return rules
+	}
+
+	// Check comma-separated keys
+	for key := range cd {
+		if strings.Contains(key, ",") {
+			parts := strings.Split(key, ",")
+			for _, part := range parts {
+				if strings.TrimSpace(part) == osName {
+					if rules := cd.parseRules(key); rules != nil {
+						return rules
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Check unix for Unix-like systems (all except Windows)
+	if osName != "windows" {
+		if rules := cd.parseRules("unix"); rules != nil {
 			return rules
 		}
 	}
 
-	// Check exact OS match
-	switch osName {
-	case "darwin":
-		if len(cd.Darwin) > 0 {
-			return cd.Darwin
-		}
-	case "linux":
-		if len(cd.Linux) > 0 {
-			return cd.Linux
-		}
-	case "windows":
-		if len(cd.Windows) > 0 {
-			return cd.Windows
-		}
-	case "freebsd":
-		if len(cd.FreeBSD) > 0 {
-			return cd.FreeBSD
-		}
-	case "openbsd":
-		if len(cd.OpenBSD) > 0 {
-			return cd.OpenBSD
-		}
-	case "netbsd":
-		if len(cd.NetBSD) > 0 {
-			return cd.NetBSD
-		}
-	case "dragonfly":
-		if len(cd.Dragonfly) > 0 {
-			return cd.Dragonfly
-		}
-	case "solaris":
-		if len(cd.Solaris) > 0 {
-			return cd.Solaris
-		}
-	case "illumos":
-		// Check illumos first, then fall back to solaris
-		if len(cd.Illumos) > 0 {
-			return cd.Illumos
-		}
-		if len(cd.Solaris) > 0 {
-			return cd.Solaris
-		}
-	default:
-		// Unknown OS - will fall through to unix/all checks
-	}
-
-	// Check unix for Unix-like systems (all except Windows)
-	if osName != "windows" && len(cd.Unix) > 0 {
-		return cd.Unix
-	}
-
 	// Fall back to "all"
-	return cd.All
+	return cd.parseRules("all")
+}
+
+// parseRules converts the raw YAML data into CommandRule slice.
+func (cd CheckDefinition) parseRules(key string) []CommandRule {
+	val, exists := cd[key]
+	if !exists {
+		return nil
+	}
+	if val == nil {
+		return nil
+	}
+
+	// The value should be a slice of rule maps
+	slice, ok := val.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	if len(slice) == 0 {
+		return nil
+	}
+
+	var rules []CommandRule
+	for _, item := range slice {
+		// Each item should be a map
+		var ruleMap map[string]interface{}
+
+		switch m := item.(type) {
+		case map[string]interface{}:
+			ruleMap = m
+		case map[interface{}]interface{}:
+			// Convert to map[string]interface{}
+			ruleMap = make(map[string]interface{})
+			for k, v := range m {
+				if ks, ok := k.(string); ok {
+					ruleMap[ks] = v
+				}
+			}
+		case CheckDefinition:
+			// It's another CheckDefinition, treat it as a map
+			ruleMap = map[string]interface{}(m)
+		default:
+			continue
+		}
+
+		if ruleMap == nil {
+			continue
+		}
+
+		// Build the CommandRule
+		rule := CommandRule{}
+		if output, ok := ruleMap["output"].(string); ok {
+			rule.Output = output
+		}
+		if file, ok := ruleMap["file"].(string); ok {
+			rule.File = file
+		}
+		if includes, ok := ruleMap["includes"].(string); ok {
+			rule.Includes = includes
+		}
+		if excludes, ok := ruleMap["excludes"].(string); ok {
+			rule.Excludes = excludes
+		}
+		// Handle exitcode which might be unmarshaled as different numeric types
+		if exitCode := ruleMap["exitcode"]; exitCode != nil {
+			switch v := exitCode.(type) {
+			case int:
+				rule.ExitCode = &v
+			case int64:
+				i := int(v)
+				rule.ExitCode = &i
+			case float64:
+				i := int(v)
+				rule.ExitCode = &i
+			}
+		}
+
+		// Handle remediation array
+		if rem, ok := ruleMap["remediation"].([]interface{}); ok {
+			for _, r := range rem {
+				if str, ok := r.(string); ok {
+					rule.Remediation = append(rule.Remediation, str)
+				}
+			}
+		}
+
+		// Only add rules that have either output or file
+		if rule.Output != "" || rule.File != "" {
+			rules = append(rules, rule)
+		}
+	}
+
+	return rules
 }

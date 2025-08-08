@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+// containsShellOperators checks if a command contains shell operators that indicate
+// it needs shell interpretation (pipes, redirects, command chaining, subshells, etc).
+func containsShellOperators(command string) bool {
+	shellOperators := []string{"|", "&", ";", ">", "<", "(", ")", "{", "}", "$", "`", "||", "&&"}
+	for _, op := range shellOperators {
+		if strings.Contains(command, op) {
+			return true
+		}
+	}
+	return false
+}
+
 // securePath returns a secure PATH based on the OS.
 func securePath() string {
 	switch runtime.GOOS {
@@ -43,46 +55,50 @@ func securePath() string {
 func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) gitmdm.CommandOutput {
 	start := time.Now()
 
-	// Extract the primary command (first word) to check if it exists
-	commandParts := strings.Fields(command)
-	if len(commandParts) > 0 {
-		primaryCmd := commandParts[0]
+	// Skip PATH checking if the command contains shell operators
+	// These commands need shell interpretation and can't be validated simply
+	if !containsShellOperators(command) {
+		// Extract the primary command (first word) to check if it exists
+		commandParts := strings.Fields(command)
+		if len(commandParts) > 0 {
+			primaryCmd := commandParts[0]
 
-		// Check if this is a shell builtin or special command
-		shellBuiltins := map[string]bool{
-			"echo": true, "test": true, "[": true, "[[": true, "if": true,
-			"then": true, "else": true, "fi": true, "for": true, "while": true,
-			"do": true, "done": true, "case": true, "esac": true, "function": true,
-			"return": true, "break": true, "continue": true, "exit": true,
-			"source": true, ".": true, "eval": true, "exec": true, "export": true,
-			"unset": true, "shift": true, "cd": true, "pwd": true, "read": true,
-			"readonly": true, "declare": true, "typeset": true, "local": true,
-			"true": true, "false": true, "type": true, "command": true,
-			// Include sudo and doas since they're commonly used
-			"sudo": true, "doas": true,
-		}
-
-		// If it's not a shell builtin and not a path, check if the command exists
-		if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
-			// Temporarily set PATH for LookPath
-			oldPath := os.Getenv("PATH")
-			if err := os.Setenv("PATH", securePath()); err != nil {
-				log.Printf("[WARN] Failed to set PATH for command check: %v", err)
-			}
-			_, lookupErr := exec.LookPath(primaryCmd)
-			if err := os.Setenv("PATH", oldPath); err != nil {
-				log.Printf("[WARN] Failed to restore PATH: %v", err)
+			// Check if this is a shell builtin or special command
+			shellBuiltins := map[string]bool{
+				"echo": true, "test": true, "[": true, "[[": true, "if": true,
+				"then": true, "else": true, "fi": true, "for": true, "while": true,
+				"do": true, "done": true, "case": true, "esac": true, "function": true,
+				"return": true, "break": true, "continue": true, "exit": true,
+				"source": true, ".": true, "eval": true, "exec": true, "export": true,
+				"unset": true, "shift": true, "cd": true, "pwd": true, "read": true,
+				"readonly": true, "declare": true, "typeset": true, "local": true,
+				"true": true, "false": true, "type": true, "command": true,
+				// Include sudo and doas since they're commonly used
+				"sudo": true, "doas": true,
 			}
 
-			if lookupErr != nil {
-				if *debug {
-					log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
+			// If it's not a shell builtin and not a path, check if the command exists
+			if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
+				// Temporarily set PATH for LookPath
+				oldPath := os.Getenv("PATH")
+				if err := os.Setenv("PATH", securePath()); err != nil {
+					log.Printf("[WARN] Failed to set PATH for command check: %v", err)
 				}
-				return gitmdm.CommandOutput{
-					Command:  command,
-					Stdout:   "",
-					Stderr:   fmt.Sprintf("Skipped: %s not found", primaryCmd),
-					ExitCode: -2, // Special exit code for skipped
+				_, lookupErr := exec.LookPath(primaryCmd)
+				if err := os.Setenv("PATH", oldPath); err != nil {
+					log.Printf("[WARN] Failed to restore PATH: %v", err)
+				}
+
+				if lookupErr != nil {
+					if *debug {
+						log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
+					}
+					return gitmdm.CommandOutput{
+						Command:  command,
+						Stdout:   "",
+						Stderr:   fmt.Sprintf("Skipped: %s not found", primaryCmd),
+						ExitCode: -2, // Special exit code for skipped
+					}
 				}
 			}
 		}

@@ -26,7 +26,6 @@ checks:
           - Enable full disk encryption using LUKS
           - Run 'sudo cryptsetup luksFormat /dev/sdX' for each unencrypted partition
           - Update /etc/crypttab and /etc/fstab accordingly
-
     darwin:
       - output: fdesetup status
         includes: "FileVault is Off|Encryption Not Enabled"
@@ -55,6 +54,24 @@ checks:
           - Enable CGD (CryptoGraphic Disk) encryption
           - Configure /etc/cgd/cgd.conf
           - See NetBSD guide on CGD configuration
+    linux, freebsd:
+      # Check for ZFS root encryption (zroot is common on FreeBSD and Linux)
+      - output: (sudo zfs get -H encryption zroot 2>/dev/null || doas zfs get -H encryption zroot 2>/dev/null || zfs get -H encryption zroot 2>/dev/null) | awk '{print $3}'
+        includes: "^off$"
+        remediation:
+          - ZFS root pool is not encrypted
+          - Create an encrypted ZFS dataset or migrate to an encrypted pool
+          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase zroot ..."
+          - Note that existing pools cannot be encrypted in-place
+    solaris, illumos:
+      # Check for ZFS root encryption (rpool is standard on Solaris/illumos)
+      - output: (sudo zfs get -H encryption rpool 2>/dev/null || doas zfs get -H encryption rpool 2>/dev/null || zfs get -H encryption rpool 2>/dev/null) | awk '{print $3}'
+        includes: "^off$"
+        remediation:
+          - ZFS root pool is not encrypted
+          - Create an encrypted ZFS dataset or migrate to an encrypted pool
+          - "For new pools: zpool create -O encryption=on -O keyformat=passphrase rpool ..."
+          - Note that existing pools cannot be encrypted in-place
     windows:
       - output: manage-bde -status
         includes: "Protection Off|Encryption Percentage.*0%"

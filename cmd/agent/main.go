@@ -101,6 +101,17 @@ type Agent struct {
 	user          string
 }
 
+// normalizeServerURL ensures the server URL has a protocol and removes trailing slash.
+func normalizeServerURL(url string) string {
+	// Add https:// if no protocol is specified
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		log.Printf("[INFO] No protocol specified for %s, using https://", url)
+		url = "https://" + url
+	}
+	// Remove trailing slash
+	return strings.TrimSuffix(url, "/")
+}
+
 // handleInstall handles the agent installation process.
 func (a *Agent) handleInstall() error {
 	if *server == "" || *join == "" {
@@ -108,7 +119,7 @@ func (a *Agent) handleInstall() error {
 	}
 
 	// Set up agent configuration for verification
-	a.serverURL = strings.TrimSuffix(*server, "/")
+	a.serverURL = normalizeServerURL(*server)
 	a.joinKey = *join
 
 	// Verify server connection and join key by sending a test report
@@ -206,7 +217,7 @@ func (a *Agent) configureServerConnection() error {
 		}
 	}
 
-	a.serverURL = strings.TrimSuffix(*server, "/")
+	a.serverURL = normalizeServerURL(*server)
 	a.joinKey = *join
 	return nil
 }

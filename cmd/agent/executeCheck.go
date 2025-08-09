@@ -36,7 +36,7 @@ func (a *Agent) executeCheck(ctx context.Context, checkName string, rule config.
 func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.CommandOutput {
 	start := time.Now()
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Reading file for check %s: %s", checkName, rule.File)
 	}
 
@@ -49,7 +49,7 @@ func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.Command
 	if err != nil {
 		if os.IsNotExist(err) {
 			output.FileMissing = true
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] File not found for check %s: %s", checkName, rule.File)
 			}
 		} else {
@@ -71,7 +71,7 @@ func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.Command
 		log.Printf("[ERROR] Failed to analyze file check: %v", err)
 	}
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] File read completed in %v (missing: %v, failed: %v): %s",
 			time.Since(start), output.FileMissing, output.Failed, rule.File)
 	}
@@ -79,62 +79,54 @@ func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.Command
 	return output
 }
 
+// checkCommandAvailable verifies that a command is available to execute.
+func checkCommandAvailable(checkName, command string) *gitmdm.CommandOutput {
+	if containsShellOperators(command) {
+		return nil // Commands with shell operators need shell interpretation
+	}
+
+	commandParts := strings.Fields(command)
+	if len(commandParts) == 0 {
+		return nil
+	}
+
+	primaryCmd := commandParts[0]
+	if isShellBuiltin(primaryCmd) || strings.Contains(primaryCmd, "/") {
+		return nil // Shell builtins and absolute paths don't need validation
+	}
+
+	// Temporarily set PATH for LookPath
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", securePath()); err != nil {
+		log.Printf("[WARN] Failed to set PATH for command check: %v", err)
+	}
+	_, lookupErr := exec.LookPath(primaryCmd)
+	if err := os.Setenv("PATH", oldPath); err != nil {
+		log.Printf("[WARN] Failed to restore PATH: %v", err)
+	}
+
+	if lookupErr != nil {
+		if *debugMode {
+			log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
+		}
+		return &gitmdm.CommandOutput{
+			Command:     command,
+			Skipped:     true,
+			FileMissing: true, // Treat missing command like missing file
+			Stderr:      fmt.Sprintf("Skipped: %s not found", primaryCmd),
+		}
+	}
+	return nil
+}
+
 // executeCommand executes a command and returns its output.
 func (a *Agent) executeCommand(ctx context.Context, checkName string, rule config.CommandRule) gitmdm.CommandOutput {
 	start := time.Now()
 	command := rule.Output
 
-	// Skip PATH checking if the command contains shell operators
-	// These commands need shell interpretation and can't be validated simply
-	if !containsShellOperators(command) {
-		// Extract the primary command (first word) to check if it exists
-		commandParts := strings.Fields(command)
-		if len(commandParts) > 0 {
-			primaryCmd := commandParts[0]
-
-			// Check if this is a shell builtin or special command
-			shellBuiltins := map[string]bool{
-				"echo": true, "test": true, "[": true, "[[": true, "if": true,
-				"then": true, "else": true, "fi": true, "for": true, "while": true,
-				"do": true, "done": true, "case": true, "esac": true, "function": true,
-				"return": true, "break": true, "continue": true, "exit": true,
-				"source": true, ".": true, "eval": true, "exec": true, "export": true,
-				"unset": true, "shift": true, "cd": true, "pwd": true, "read": true,
-				"readonly": true, "declare": true, "typeset": true, "local": true,
-				"true": true, "false": true, "type": true, "command": true,
-				// Include sudo and doas since they're commonly used
-				"sudo": true, "doas": true,
-			}
-
-			// If it's not a shell builtin and not a path, check if the command exists
-			if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
-				// Temporarily set PATH for LookPath
-				oldPath := os.Getenv("PATH")
-				if err := os.Setenv("PATH", securePath()); err != nil {
-					log.Printf("[WARN] Failed to set PATH for command check: %v", err)
-				}
-				_, lookupErr := exec.LookPath(primaryCmd)
-				if err := os.Setenv("PATH", oldPath); err != nil {
-					log.Printf("[WARN] Failed to restore PATH: %v", err)
-				}
-
-				if lookupErr != nil {
-					if *debug {
-						log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
-					}
-
-					output := gitmdm.CommandOutput{
-						Command:     command,
-						Skipped:     true,
-						FileMissing: true, // Treat missing command like missing file
-						Stderr:      fmt.Sprintf("Skipped: %s not found", primaryCmd),
-					}
-
-					// Don't analyze skipped commands
-					return output
-				}
-			}
-		}
+	// Check if command is available
+	if result := checkCommandAvailable(checkName, command); result != nil {
+		return *result
 	}
 
 	// Use longer timeout for software update checks (they contact remote servers)
@@ -146,7 +138,7 @@ func (a *Agent) executeCommand(ctx context.Context, checkName string, rule confi
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Executing command: %s", command)
 	}
 
@@ -158,7 +150,7 @@ func (a *Agent) executeCommand(ctx context.Context, checkName string, rule confi
 		log.Printf("[ERROR] Failed to analyze command check: %v", err)
 	}
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Command completed in %v (skipped: %v, failed: %v): %s",
 			time.Since(start), output.Skipped, output.Failed, command)
 	}

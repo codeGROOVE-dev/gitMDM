@@ -679,6 +679,65 @@ func (s *Server) handleDevice(writer http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// validateJoinKey checks if the provided join key is valid.
+func validateJoinKey(providedKey string) bool {
+	return len(providedKey) == len(*joinKey) && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*joinKey)) == 1
+}
+
+// validateHardwareID validates the hardware ID format.
+func validateHardwareID(id string) error {
+	if id == "" || len(id) > maxFieldLength {
+		return fmt.Errorf("invalid length: %d", len(id))
+	}
+
+	// Only allow safe characters in hardware ID
+	for _, r := range id {
+		if (r < 'a' || r > 'z') &&
+			(r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') &&
+			r != '-' && r != '_' && r != '.' {
+			return fmt.Errorf("invalid character: %c", r)
+		}
+	}
+	return nil
+}
+
+// validateReportFields validates the basic fields of a device report.
+func validateReportFields(report gitmdm.DeviceReport) error {
+	if err := validateHardwareID(report.HardwareID); err != nil {
+		return fmt.Errorf("hardware ID: %w", err)
+	}
+	if len(report.Hostname) > maxFieldLength {
+		return fmt.Errorf("hostname too long: %d bytes exceeds %d byte limit", len(report.Hostname), maxFieldLength)
+	}
+	if len(report.User) > maxFieldLength {
+		return fmt.Errorf("username too long: %d bytes", len(report.User))
+	}
+	return nil
+}
+
+// validateChecks validates the checks in a device report.
+func validateChecks(checks map[string]gitmdm.Check) error {
+	for name, check := range checks {
+		if len(name) > maxCheckName {
+			return fmt.Errorf("check name too long: %d bytes", len(name))
+		}
+		if !gitmdm.IsValidCheckName(name) {
+			return fmt.Errorf("invalid check name format: %s", name)
+		}
+
+		// Check combined output size
+		totalOutput := 0
+		for _, output := range check.Outputs {
+			totalOutput += len(output.Stdout) + len(output.Stderr)
+		}
+		if totalOutput > maxCheckOutput {
+			return fmt.Errorf("check output too large: %d bytes exceeds %d byte limit", totalOutput, maxCheckOutput)
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request) {
 	start := time.Now()
 	s.incrementRequestCount()
@@ -689,11 +748,8 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	// Security: Check join key - always required
-	providedKey := request.Header.Get("X-Join-Key")
-	// Security: Don't accept join key from query params (exposes in logs)
-	// Use constant-time comparison to prevent timing attacks
-	if len(providedKey) != len(*joinKey) || subtle.ConstantTimeCompare([]byte(providedKey), []byte(*joinKey)) != 1 {
+	// Security: Check join key
+	if !validateJoinKey(request.Header.Get("X-Join-Key")) {
 		s.incrementErrorCount()
 		log.Printf("[WARN] Unauthorized request from %s - invalid join key", request.RemoteAddr)
 		http.Error(writer, "Unauthorized - invalid join key", http.StatusUnauthorized)
@@ -712,73 +768,20 @@ func (s *Server) handleReport(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	// Security: Validate input fields
-	if report.HardwareID == "" || len(report.HardwareID) > maxFieldLength {
+	// Validate report fields
+	if err := validateReportFields(report); err != nil {
 		s.incrementErrorCount()
-		log.Printf("[WARN] Invalid Hardware ID from %s: length %d", request.RemoteAddr, len(report.HardwareID))
-		http.Error(writer, "Invalid Hardware ID", http.StatusBadRequest)
-		return
-	}
-	// Additional validation: only allow safe characters in hardware ID
-	// Allow alphanumeric, hyphens, underscores, and dots (common in UUIDs and machine IDs)
-	isValid := true
-	for _, r := range report.HardwareID {
-		if (r < 'a' || r > 'z') &&
-			(r < 'A' || r > 'Z') &&
-			(r < '0' || r > '9') &&
-			r != '-' && r != '_' && r != '.' {
-			isValid = false
-			break
-		}
-	}
-	if !isValid {
-		s.incrementErrorCount()
-		log.Printf("[WARN] Invalid Hardware ID format from %s", request.RemoteAddr)
-		http.Error(writer, "Invalid Hardware ID format", http.StatusBadRequest)
-		return
-	}
-	if len(report.Hostname) > maxFieldLength {
-		s.incrementErrorCount()
-		log.Printf("[WARN] Hostname too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.Hostname), maxFieldLength)
-		errMsg := fmt.Sprintf("Hostname too long: %d bytes exceeds %d byte limit", len(report.Hostname), maxFieldLength)
-		http.Error(writer, errMsg, http.StatusBadRequest)
-		return
-	}
-	if len(report.User) > maxFieldLength {
-		s.incrementErrorCount()
-		log.Printf("[WARN] Username too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(report.User), maxFieldLength)
-		http.Error(writer, "Username too long", http.StatusBadRequest)
+		log.Printf("[WARN] Invalid report from %s: %v", request.RemoteAddr, err)
+		http.Error(writer, fmt.Sprintf("Invalid report: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	// Security: Validate checks
-	for name, check := range report.Checks {
-		if len(name) > maxCheckName {
-			s.incrementErrorCount()
-			log.Printf("[WARN] Check name too long from %s: %d bytes, limit: %d bytes", request.RemoteAddr, len(name), maxCheckName)
-			http.Error(writer, "Check name too long", http.StatusBadRequest)
-			return
-		}
-		// Additional validation: only allow safe characters in check names
-		if !gitmdm.IsValidCheckName(name) {
-			s.incrementErrorCount()
-			log.Printf("[WARN] Invalid check name format from %s", request.RemoteAddr)
-			http.Error(writer, "Invalid check name format", http.StatusBadRequest)
-			return
-		}
-		// Check combined output size for all command outputs
-		totalOutput := 0
-		for _, output := range check.Outputs {
-			totalOutput += len(output.Stdout) + len(output.Stderr)
-		}
-		if totalOutput > maxCheckOutput {
-			s.incrementErrorCount()
-			log.Printf("[WARN] Check output too large from %s: %s (%d commands, total: %d bytes, limit: %d bytes)",
-				request.RemoteAddr, name, len(check.Outputs), totalOutput, maxCheckOutput)
-			errMsg := fmt.Sprintf("Check output too large: %d bytes exceeds %d byte limit", totalOutput, maxCheckOutput)
-			http.Error(writer, errMsg, http.StatusBadRequest)
-			return
-		}
+	// Validate checks
+	if err := validateChecks(report.Checks); err != nil {
+		s.incrementErrorCount()
+		log.Printf("[WARN] Invalid checks from %s: %v", request.RemoteAddr, err)
+		http.Error(writer, fmt.Sprintf("Invalid checks: %v", err), http.StatusBadRequest)
+		return
 	}
 
 	// Extract client IP (handle X-Forwarded-For for proxies)

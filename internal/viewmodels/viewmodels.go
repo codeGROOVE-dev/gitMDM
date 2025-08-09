@@ -72,6 +72,58 @@ type CheckResult struct {
 	Remediation []string
 }
 
+// parseUptimeValues extracts days, hours, and minutes from regex matches.
+func parseUptimeValues(matches []string) (days, hours, mins int) {
+	if len(matches) == 0 {
+		return 0, 0, 0
+	}
+
+	if matches[1] != "" {
+		if val, err := strconv.Atoi(matches[1]); err == nil {
+			days = val
+		}
+	}
+	if matches[2] != "" {
+		if val, err := strconv.Atoi(matches[2]); err == nil {
+			hours = val
+		}
+	}
+	if matches[3] != "" {
+		if val, err := strconv.Atoi(matches[3]); err == nil {
+			mins = val
+		}
+	}
+	if len(matches) > uptimeMinutesIndex && matches[uptimeMinutesIndex] != "" {
+		if val, err := strconv.Atoi(matches[uptimeMinutesIndex]); err == nil {
+			mins = val
+		}
+	}
+	return days, hours, mins
+}
+
+// formatUptimeDuration formats the parsed uptime values.
+func formatUptimeDuration(days, hours, mins int) string {
+	switch {
+	case days > 0:
+		if days == 1 {
+			return "1 day"
+		}
+		return strconv.Itoa(days) + " days"
+	case hours > 0:
+		if hours == 1 {
+			return "1 hour"
+		}
+		return strconv.Itoa(hours) + " hours"
+	case mins > 0:
+		if mins == 1 {
+			return "1 minute"
+		}
+		return strconv.Itoa(mins) + " minutes"
+	default:
+		return "less than 1 minute"
+	}
+}
+
 // formatUptime parses various uptime formats and returns a human-readable string.
 func formatUptime(uptime string) string {
 	if uptime == "" || uptime == "unavailable" || uptime == "unsupported" {
@@ -83,51 +135,8 @@ func formatUptime(uptime string) string {
 	matches := uptimeRegex.FindStringSubmatch(uptime)
 
 	if len(matches) > 0 {
-		days := 0
-		hours := 0
-		mins := 0
-
-		if matches[1] != "" {
-			if val, err := strconv.Atoi(matches[1]); err == nil {
-				days = val
-			}
-		}
-		if matches[2] != "" {
-			if val, err := strconv.Atoi(matches[2]); err == nil {
-				hours = val
-			}
-		}
-		if matches[3] != "" {
-			if val, err := strconv.Atoi(matches[3]); err == nil {
-				mins = val
-			}
-		}
-		if matches[uptimeMinutesIndex] != "" {
-			if val, err := strconv.Atoi(matches[uptimeMinutesIndex]); err == nil {
-				mins = val
-			}
-		}
-
-		// Format the output
-		switch {
-		case days > 0:
-			if days == 1 {
-				return "1 day"
-			}
-			return strconv.Itoa(days) + " days"
-		case hours > 0:
-			if hours == 1 {
-				return "1 hour"
-			}
-			return strconv.Itoa(hours) + " hours"
-		case mins > 0:
-			if mins == 1 {
-				return "1 minute"
-			}
-			return strconv.Itoa(mins) + " minutes"
-		default:
-			return "less than 1 minute"
-		}
+		days, hours, mins := parseUptimeValues(matches)
+		return formatUptimeDuration(days, hours, mins)
 	}
 
 	// Try to parse Windows format or if the regex didn't match, return the original

@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"gitmdm/internal/analyzer"
@@ -20,7 +21,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +35,9 @@ import (
 )
 
 const (
+	// Version of the agent.
+	version = "1.0.0"
+
 	// Command execution timeout.
 	commandTimeout = 10 * time.Second
 
@@ -41,7 +47,8 @@ const (
 	osLinux   = "linux"
 
 	// Windows command constants.
-	wmicCmd = "wmic"
+	wmicCmd    = "wmic"
+	wmicGetArg = "get"
 	// Maximum output size to prevent memory exhaustion.
 	maxOutputSize = 92160 // 90KB limit (matching server)
 	// Maximum log output length for readability.
@@ -75,7 +82,7 @@ var (
 	runCheck   = flag.String("run", "", "Run a single check and exit (use 'all' to run all checks)")
 	listChecks = flag.Bool("list", false, "List available compliance checks")
 	interval   = flag.Duration("interval", 20*time.Minute, "Polling interval")
-	debug      = flag.Bool("debug", false, "Enable debug logging")
+	debugMode  = flag.Bool("debug", false, "Enable debug logging")
 	verbose    = flag.Bool("verbose", false, "Show all check outputs, not just failures (with --run all)")
 	install    = flag.Bool("install", false, "Install agent to run automatically at startup")
 	uninstall  = flag.Bool("uninstall", false, "Uninstall agent and remove autostart")
@@ -94,12 +101,121 @@ type Agent struct {
 	user          string
 }
 
-func main() {
-	flag.Parse()
+// handleInstall handles the agent installation process.
+func (a *Agent) handleInstall() error {
+	if *server == "" || *join == "" {
+		return errors.New("--server and --join flags are required for installation")
+	}
 
+	// Set up agent configuration for verification
+	a.serverURL = strings.TrimSuffix(*server, "/")
+	a.joinKey = *join
+
+	// Verify server connection and join key by sending a test report
+	log.Println("Verifying server connection and join key...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Run checks and attempt to report to server
+	report := a.buildDeviceReport(ctx)
+
+	// Retry the verification with exponential backoff
+	if err := a.verifyServerConnection(ctx, report); err != nil {
+		cancel()
+		return fmt.Errorf("failed to verify server connection after %d attempts: %v\n"+
+			"Please check your --server and --join parameters", maxRetries+1, err)
+	}
+
+	log.Println("✓ Server connection verified successfully")
+	log.Printf("✓ Device registered as: %s (%s)", a.hostname, a.hardwareID)
+
+	// Now proceed with installation
+	if err := installAgent(*server, *join); err != nil {
+		return fmt.Errorf("installation failed: %w", err)
+	}
+	log.Println("✓ Agent installed successfully and will run automatically at startup")
+	return nil
+}
+
+// verifyServerConnection verifies the server connection with retries.
+func (a *Agent) verifyServerConnection(ctx context.Context, report gitmdm.DeviceReport) error {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt-1)))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			log.Printf("[INFO] Retrying verification (attempt %d/%d) after %v...", attempt, maxRetries, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		if err := a.sendReport(ctx, report); err != nil {
+			lastErr = err
+			log.Printf("[WARN] Verification attempt %d failed: %v", attempt+1, err)
+			continue
+		}
+		// Success!
+		return nil
+	}
+	return lastErr
+}
+
+// buildDeviceReport builds a complete device report.
+func (a *Agent) buildDeviceReport(ctx context.Context) gitmdm.DeviceReport {
+	return gitmdm.DeviceReport{
+		HardwareID:    a.hardwareID,
+		Hostname:      a.hostname,
+		User:          a.user,
+		Timestamp:     time.Now(),
+		Checks:        a.runAllChecks(ctx),
+		OS:            a.osInfo(ctx),
+		Architecture:  runtime.GOARCH, // Directly get architecture
+		Version:       a.osVersion(ctx),
+		SystemUptime:  a.systemUptime(ctx),
+		CPULoad:       a.cpuLoad(ctx),
+		LoggedInUsers: a.loggedInUsers(ctx),
+	}
+}
+
+// configureServerConnection configures the server connection from flags or config file.
+func (a *Agent) configureServerConnection() error {
+	// Try to load config file if server/join not provided via flags
+	if *server == "" || *join == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			// Config file doesn't exist or is invalid
+			if *server == "" {
+				return errors.New("server URL is required (use --server flag or install agent with --install)")
+			}
+			if *join == "" {
+				return errors.New("join key is required (use --join flag or install agent with --install)")
+			}
+		} else {
+			// Use config file values if flags not provided
+			if *server == "" {
+				*server = cfg.ServerURL
+			}
+			if *join == "" {
+				*join = cfg.JoinKey
+			}
+		}
+	}
+
+	a.serverURL = strings.TrimSuffix(*server, "/")
+	a.joinKey = *join
+	return nil
+}
+
+// initializeAgent creates and initializes an Agent instance.
+func initializeAgent() (*Agent, error) {
 	var cfg config.Config
 	if err := yaml.Unmarshal(checksConfig, &cfg); err != nil {
-		log.Fatalf("Failed to parse checks config: %v", err)
+		return nil, fmt.Errorf("failed to parse checks config: %w", err)
 	}
 
 	// Get hostname directly
@@ -117,7 +233,7 @@ func main() {
 		user = "unknown"
 	}
 
-	agent := &Agent{
+	return &Agent{
 		config:     &cfg,
 		hardwareID: hardwareID(),
 		hostname:   hostname,
@@ -126,6 +242,70 @@ func main() {
 			Timeout: httpTimeout,
 		},
 		failedReports: make(chan gitmdm.DeviceReport, failedReportsQueueSize),
+	}, nil
+}
+
+// setupLogging configures logging to both console and file.
+func setupLogging() (*os.File, error) {
+	// Create log directory if it doesn't exist
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	logDir := filepath.Join(homeDir, ".gitmdm")
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
+		return nil, fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// Open log file for appending (only accessible by user)
+	logPath := filepath.Join(logDir, "agent.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file: %w", err)
+	}
+
+	// Set up multi-writer to log to both console and file
+	multiWriter := io.MultiWriter(os.Stderr, logFile)
+	log.SetOutput(multiWriter)
+
+	// Add timestamp to logs
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
+	return logFile, nil
+}
+
+func main() {
+	// Set up panic recovery first
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[PANIC] Agent crashed: %v\nStack trace:\n%s", r, debug.Stack())
+			os.Exit(1)
+		}
+	}()
+
+	flag.Parse()
+
+	// Set up file logging (non-fatal if it fails)
+	var logFile *os.File
+	if lf, err := setupLogging(); err != nil {
+		log.Printf("[WARN] Failed to set up file logging: %v", err)
+	} else {
+		logFile = lf
+		defer func() {
+			if err := logFile.Close(); err != nil {
+				log.Printf("[WARN] Failed to close log file: %v", err)
+			}
+		}()
+		log.Printf("[INFO] Agent starting - version %s, PID %d", version, os.Getpid())
+	}
+
+	agent, err := initializeAgent()
+	if err != nil {
+		if logFile != nil {
+			_ = logFile.Close() //nolint:errcheck // Best effort before exiting
+		}
+		log.Fatal(err) //nolint:gocritic // exitAfterDefer - panic recovery needed
 	}
 
 	// Handle --list flag
@@ -136,77 +316,9 @@ func main() {
 
 	// Handle --install flag
 	if *install {
-		if *server == "" || *join == "" {
-			log.Fatal("--server and --join flags are required for installation")
+		if err := agent.handleInstall(); err != nil {
+			log.Fatal(err)
 		}
-
-		// Set up agent configuration for verification
-		agent.serverURL = strings.TrimSuffix(*server, "/")
-		agent.joinKey = *join
-
-		// Verify server connection and join key by sending a test report
-		log.Println("Verifying server connection and join key...")
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Run checks and attempt to report to server
-		report := gitmdm.DeviceReport{
-			HardwareID:    agent.hardwareID,
-			Hostname:      agent.hostname,
-			User:          agent.user,
-			Timestamp:     time.Now(),
-			Checks:        agent.runAllChecks(ctx),
-			OS:            agent.osInfo(ctx),
-			Architecture:  agent.architecture(ctx),
-			Version:       agent.osVersion(ctx),
-			SystemUptime:  agent.systemUptime(ctx),
-			CPULoad:       agent.cpuLoad(ctx),
-			LoggedInUsers: agent.loggedInUsers(ctx),
-		}
-
-		// Retry the verification with exponential backoff
-		var lastErr error
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			if attempt > 0 {
-				backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt-1)))
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-				log.Printf("[INFO] Retrying verification (attempt %d/%d) after %v...", attempt, maxRetries, backoff)
-				select {
-				case <-time.After(backoff):
-				case <-ctx.Done():
-					cancel()
-					//nolint:gocritic,lll // exitAfterDefer
-					log.Fatalf("Verification cancelled: %v", ctx.Err())
-				}
-			}
-
-			if err := agent.sendReport(ctx, report); err != nil {
-				lastErr = err
-				log.Printf("[WARN] Verification attempt %d failed: %v", attempt+1, err)
-				continue
-			}
-			// Success!
-			lastErr = nil
-			break
-		}
-
-		if lastErr != nil {
-			cancel()
-			//nolint:lll // exitAfterDefer
-			log.Fatalf("Failed to verify server connection after %d attempts: %v\n"+
-				"Please check your --server and --join parameters", maxRetries+1, lastErr)
-		}
-
-		log.Println("✓ Server connection verified successfully")
-		log.Printf("✓ Device registered as: %s (%s)", agent.hostname, agent.hardwareID)
-
-		// Now proceed with installation
-		if err := installAgent(*server, *join); err != nil {
-			log.Fatalf("Installation failed: %v", err)
-		}
-		log.Println("✓ Agent installed successfully and will run automatically at startup")
 		return
 	}
 
@@ -237,30 +349,10 @@ func main() {
 		return
 	}
 
-	// Try to load config file if server/join not provided via flags
-	if *server == "" || *join == "" {
-		cfg, err := loadConfig()
-		if err != nil {
-			// Config file doesn't exist or is invalid
-			if *server == "" {
-				log.Fatal("Server URL is required (use --server flag or install agent with --install)")
-			}
-			if *join == "" {
-				log.Fatal("Join key is required (use --join flag or install agent with --install)")
-			}
-		} else {
-			// Use config file values if flags not provided
-			if *server == "" {
-				*server = cfg.ServerURL
-			}
-			if *join == "" {
-				*join = cfg.JoinKey
-			}
-		}
+	// Configure server connection
+	if err := agent.configureServerConnection(); err != nil {
+		log.Fatal(err)
 	}
-
-	agent.serverURL = strings.TrimSuffix(*server, "/")
-	agent.joinKey = *join
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -275,20 +367,31 @@ func main() {
 	log.Printf("[INFO] Reporting to server: %s every %v", agent.serverURL, *interval)
 	log.Printf("[INFO] Retry configuration: max_retries=%d, initial_backoff=%v, max_backoff=%v", maxRetries, initialBackoff, maxBackoff)
 
-	// Start failed reports processor
-	go agent.processFailedReports(ctx)
+	// Start failed reports processor with panic recovery
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[PANIC] Failed reports processor crashed: %v\nStack trace:\n%s", r, debug.Stack())
+			}
+		}()
+		agent.processFailedReports(ctx)
+	}()
 
 	// Initial report
+	log.Println("[INFO] Sending initial report to server")
 	agent.reportToServer(ctx)
 
+	log.Println("[INFO] Agent main loop started, waiting for next interval or shutdown signal")
 	for {
 		select {
 		case <-ticker.C:
+			log.Printf("[INFO] Interval elapsed (%v), sending report", *interval)
 			agent.reportToServer(ctx)
-		case <-sigChan:
-			log.Println("Shutting down agent...")
+		case sig := <-sigChan:
+			log.Printf("[INFO] Received signal %v, shutting down agent gracefully", sig)
 			return
 		case <-ctx.Done():
+			log.Println("[INFO] Context cancelled, shutting down agent")
 			return
 		}
 	}
@@ -296,27 +399,9 @@ func main() {
 
 func (a *Agent) reportToServer(ctx context.Context) {
 	start := time.Now()
+	report := a.buildDeviceReport(ctx)
 
-	// Collect system metrics (not persisted to git)
-	uptime := a.systemUptime(ctx)
-	cpuLoad := a.cpuLoad(ctx)
-	loggedInUsers := a.loggedInUsers(ctx)
-
-	report := gitmdm.DeviceReport{
-		HardwareID:    a.hardwareID,
-		Hostname:      a.hostname,
-		User:          a.user,
-		Timestamp:     time.Now(),
-		Checks:        a.runAllChecks(ctx),
-		OS:            a.osInfo(ctx),
-		Architecture:  a.architecture(ctx),
-		Version:       a.osVersion(ctx),
-		SystemUptime:  uptime,
-		CPULoad:       cpuLoad,
-		LoggedInUsers: loggedInUsers,
-	}
-
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Generated report with %d checks in %v", len(report.Checks), time.Since(start))
 	}
 
@@ -329,7 +414,7 @@ func (a *Agent) reportToServer(ctx context.Context) {
 		return a.sendReport(ctx, report)
 	}, retry.Attempts(maxRetries), retry.DelayType(retry.FullJitterBackoffDelay), retry.Delay(initialBackoff), retry.MaxDelay(maxBackoff))
 	if err != nil {
-		log.Printf("[ERROR] Failed to send report after %d retries: %v", maxRetries, err)
+		log.Printf("[ERROR] Failed to send report after %d attempts: %v", retryCount, err)
 		// Queue for later retry if queue not full
 		select {
 		case a.failedReports <- report:
@@ -340,7 +425,10 @@ func (a *Agent) reportToServer(ctx context.Context) {
 		return
 	}
 
-	if *debug {
+	// Log success, noting if retries were needed
+	if retryCount > 1 {
+		log.Printf("[INFO] Successfully reported to server after %d attempts (took %v)", retryCount, time.Since(start))
+	} else if *debugMode {
 		log.Printf("[DEBUG] Successfully reported to server in %v", time.Since(start))
 	}
 }
@@ -361,6 +449,7 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[ERROR] Failed to send report to %s: %v", a.serverURL, err)
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
@@ -369,13 +458,19 @@ func (a *Agent) sendReport(ctx context.Context, report gitmdm.DeviceReport) erro
 		}
 	}()
 
+	// Log the HTTP response code
+	log.Printf("[INFO] Report sent to %s - Response: %d %s", a.serverURL, resp.StatusCode, resp.Status)
+
 	if resp.StatusCode != http.StatusOK {
 		// Read response body for debugging (limit to 256 bytes)
 		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 		if err != nil {
+			log.Printf("[ERROR] Server returned %d but failed to read response body: %v", resp.StatusCode, err)
 			return fmt.Errorf("server returned status %d (failed to read body: %w)", resp.StatusCode, err)
 		}
-		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		errorMsg := string(bodyBytes)
+		log.Printf("[ERROR] Server returned %d: %s", resp.StatusCode, errorMsg)
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, errorMsg)
 	}
 
 	return nil
@@ -435,7 +530,7 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 	successCount := 0
 	failureCount := 0
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Running %d checks for OS: %s", len(a.config.Checks), osName)
 	}
 
@@ -446,7 +541,7 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 		// Get the rules for this OS
 		rules := checkDef.CommandsForOS(osName)
 		if len(rules) == 0 {
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] Check %s not available for OS %s", checkName, osName)
 			}
 			continue
@@ -475,12 +570,12 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 		switch status {
 		case statusPass:
 			successCount++
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] Check %s passed in %v: %s", checkName, time.Since(checkStart), reason)
 			}
 		case statusFail:
 			failureCount++
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] Check %s failed in %v: %s", checkName, time.Since(checkStart), reason)
 			}
 		default:
@@ -588,7 +683,7 @@ func (*Agent) systemUptime(ctx context.Context) string {
 	case "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "uptime")
 	case osWindows:
-		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "lastbootuptime")
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", wmicGetArg, "lastbootuptime")
 	default:
 		return "unsupported"
 	}
@@ -612,7 +707,7 @@ func (*Agent) cpuLoad(ctx context.Context) string {
 	case "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "uptime")
 	case osWindows:
-		cmd = exec.CommandContext(ctx, wmicCmd, "cpu", "get", "loadpercentage")
+		cmd = exec.CommandContext(ctx, wmicCmd, "cpu", wmicGetArg, "loadpercentage")
 	default:
 		return "unsupported"
 	}
@@ -647,7 +742,7 @@ func (*Agent) loggedInUsers(ctx context.Context) string {
 	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "who")
 	case osWindows:
-		cmd = exec.CommandContext(ctx, wmicCmd, "computersystem", "get", "username")
+		cmd = exec.CommandContext(ctx, wmicCmd, "computersystem", wmicGetArg, "username")
 	default:
 		return "unsupported"
 	}
@@ -699,7 +794,7 @@ func (*Agent) osInfo(ctx context.Context) string {
 	case osDarwin:
 		cmd = exec.CommandContext(ctx, "sw_vers", "-productName")
 	case osWindows:
-		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "Caption", "/value")
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", wmicGetArg, "Caption", "/value")
 	default:
 		cmd = exec.CommandContext(ctx, "uname", "-s")
 	}
@@ -718,11 +813,6 @@ func (*Agent) osInfo(ctx context.Context) string {
 	return runtime.GOOS
 }
 
-func (*Agent) architecture(ctx context.Context) string {
-	// runtime.GOARCH is the most reliable way to get architecture
-	return runtime.GOARCH
-}
-
 func (*Agent) osVersion(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -733,7 +823,7 @@ func (*Agent) osVersion(ctx context.Context) string {
 	case osDarwin:
 		cmd = exec.CommandContext(ctx, "sw_vers", "-productVersion")
 	case osWindows:
-		cmd = exec.CommandContext(ctx, wmicCmd, "os", "get", "Version", "/value")
+		cmd = exec.CommandContext(ctx, wmicCmd, "os", wmicGetArg, "Version", "/value")
 	default:
 		cmd = exec.CommandContext(ctx, "uname", "-r")
 	}
@@ -755,7 +845,7 @@ func darwinHardwareID() string {
 	cmd := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	output, err := cmd.Output()
 	if err != nil {
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Failed to get macOS hardware ID via ioreg: %v", err)
 		}
 		return ""
@@ -767,7 +857,7 @@ func darwinHardwareID() string {
 			parts := strings.Split(line, "\"")
 			if len(parts) >= minUUIDParts {
 				id := parts[3]
-				if *debug {
+				if *debugMode {
 					log.Printf("[DEBUG] Found macOS hardware UUID: %s", id)
 				}
 				return id
@@ -781,7 +871,7 @@ func linuxHardwareID() string {
 	data, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
 	if err == nil {
 		id := strings.TrimSpace(string(data))
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Found Linux hardware UUID from DMI: %s", id)
 		}
 		return id
@@ -790,13 +880,13 @@ func linuxHardwareID() string {
 	data, err = os.ReadFile("/etc/machine-id")
 	if err == nil {
 		id := strings.TrimSpace(string(data))
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Found Linux machine ID: %s", id)
 		}
 		return id
 	}
 
-	if *debug {
+	if *debugMode {
 		log.Print("[DEBUG] Failed to get Linux hardware ID from both DMI and machine-id")
 	}
 	return ""
@@ -808,13 +898,13 @@ func bsdHardwareID() string {
 	cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
 	output, err := cmd.Output()
 	if err != nil {
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Failed to get BSD hardware ID via sysctl: %v", err)
 		}
 		return ""
 	}
 	id := strings.TrimSpace(string(output))
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Found BSD hardware UUID: %s", id)
 	}
 	return id
@@ -826,13 +916,13 @@ func solarisHardwareID() string {
 	cmd := exec.CommandContext(ctx, "hostid")
 	output, err := cmd.Output()
 	if err != nil {
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Failed to get Solaris host ID: %v", err)
 		}
 		return ""
 	}
 	id := strings.TrimSpace(string(output))
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Found Solaris host ID: %s", id)
 	}
 	return id
@@ -850,7 +940,7 @@ func illumosHardwareID() string {
 			if strings.HasPrefix(line, "UUID=") {
 				id := strings.TrimPrefix(line, "UUID=")
 				id = strings.TrimSpace(id)
-				if *debug {
+				if *debugMode {
 					log.Printf("[DEBUG] Found Illumos UUID: %s", id)
 				}
 				return id
@@ -864,10 +954,10 @@ func illumosHardwareID() string {
 func windowsHardwareID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, wmicCmd, "csproduct", "get", "UUID")
+	cmd := exec.CommandContext(ctx, wmicCmd, "csproduct", wmicGetArg, "UUID")
 	output, err := cmd.Output()
 	if err != nil {
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Failed to get Windows hardware ID via wmic: %v", err)
 		}
 		return ""
@@ -877,7 +967,7 @@ func windowsHardwareID() string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" && trimmed != "UUID" {
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] Found Windows hardware UUID: %s", trimmed)
 			}
 			return trimmed
@@ -888,7 +978,7 @@ func windowsHardwareID() string {
 
 func hardwareID() string {
 	start := time.Now()
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Detecting hardware ID for OS: %s", runtime.GOOS)
 	}
 
@@ -907,7 +997,7 @@ func hardwareID() string {
 	case osWindows:
 		id = windowsHardwareID()
 	default:
-		if *debug {
+		if *debugMode {
 			log.Printf("[DEBUG] Unsupported OS for hardware ID detection: %s", runtime.GOOS)
 		}
 	}
@@ -916,7 +1006,7 @@ func hardwareID() string {
 		hostname, err := os.Hostname()
 		if err != nil {
 			hostname = "unknown"
-			if *debug {
+			if *debugMode {
 				log.Printf("[DEBUG] Failed to get hostname for fallback ID: %v", err)
 			}
 		}
@@ -925,7 +1015,7 @@ func hardwareID() string {
 		log.Printf("[WARN] Using fallback hardware ID based on hostname hash: %s", id)
 	}
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Hardware ID detection completed in %v: %s", time.Since(start), id)
 	}
 
@@ -963,7 +1053,10 @@ func (a *Agent) listAvailableChecks() {
 	// Display checks with descriptions from YAML
 	for _, checkName := range availableChecks {
 		checkDef := a.config.Checks[checkName]
-		description := checkDef.Description()
+		description, ok := checkDef["description"].(string)
+		if !ok {
+			description = ""
+		}
 		if description == "" {
 			description = "Compliance check"
 		}
@@ -993,15 +1086,6 @@ type CheckResultSummary struct {
 	NACount   int
 }
 
-// print is a helper for interactive mode output without timestamps.
-func printLine(format string, args ...any) {
-	if format == "" {
-		fmt.Println() //nolint:forbidigo // Interactive mode requires direct output
-	} else {
-		fmt.Printf(format+"\n", args...) //nolint:forbidigo // Interactive mode requires direct output
-	}
-}
-
 // runAllChecksInteractive runs all available checks and displays results in a modern format.
 func (a *Agent) runAllChecksInteractive() {
 	// Enable quiet mode to suppress INFO logs during interactive display
@@ -1010,8 +1094,8 @@ func (a *Agent) runAllChecksInteractive() {
 	defer func() { quiet = oldQuiet }()
 
 	osName := runtime.GOOS
-	printLine("🔍 Running compliance checks...")
-	printLine("")
+	fmt.Println("🔍 Running compliance checks...")
+	fmt.Println()
 
 	// Get all available checks for this OS
 	var availableChecks []string
@@ -1090,7 +1174,7 @@ func (a *Agent) executeAllChecks(checkNames []string, osName string) (map[string
 
 // displayCheckResults shows the check results in a formatted way.
 func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder []string, summary CheckResultSummary) {
-	printLine("")
+	fmt.Println()
 
 	// In verbose mode, show all checks
 	if *verbose {
@@ -1104,36 +1188,36 @@ func (a *Agent) displayCheckResults(results map[string]CheckResult, finalOrder [
 		if summary.FailCount != 1 {
 			pluralS = "s"
 		}
-		printLine("⚠️  %d issue%s require attention", summary.FailCount, pluralS)
-		printLine("")
+		fmt.Printf("⚠️  %d issue%s require attention\n", summary.FailCount, pluralS)
+		fmt.Println()
 		a.displayFailedChecks(results, finalOrder)
 	} else {
-		printLine("✅ All compliance checks passed")
-		printLine("")
+		fmt.Println("✅ All compliance checks passed")
+		fmt.Println()
 	}
 
 	// Show summary at the end
-	printLine("Summary: %d passed, %d failed, %d not applicable",
+	fmt.Printf("Summary: %d passed, %d failed, %d not applicable\n",
 		summary.PassCount, summary.FailCount, summary.NACount)
-	printLine("")
+	fmt.Println()
 }
 
 // displayFailedOutput displays a single failed output with appropriate formatting.
 func displayFailedOutput(idx int, output gitmdm.CommandOutput, totalOutputs int) {
 	// If multiple commands were checked, number them
 	if totalOutputs > 1 {
-		printLine("      [Command %d of %d - FAILED]", idx+1, totalOutputs)
+		fmt.Printf("      [Command %d of %d - FAILED]\n", idx+1, totalOutputs)
 	}
 
 	// Show command or file that was checked
 	if output.Command != "" {
-		printLine("      Command: %s", output.Command)
+		fmt.Printf("      Command: %s\n", output.Command)
 	} else if output.File != "" {
-		printLine("      File: %s", output.File)
+		fmt.Printf("      File: %s\n", output.File)
 	}
 	// Show why it failed
 	if output.FailReason != "" {
-		printLine("      Failure: %s", output.FailReason)
+		fmt.Printf("      Failure: %s\n", output.FailReason)
 	}
 
 	// Show relevant output (truncated for readability)
@@ -1141,15 +1225,15 @@ func displayFailedOutput(idx int, output gitmdm.CommandOutput, totalOutputs int)
 		lines := strings.Split(output.Stdout, "\n")
 		maxLines := maxDisplayLines
 		if len(lines) > maxLines {
-			printLine("      Output: %s", strings.Join(lines[:maxLines], "\n      "))
-			printLine("      ... (output truncated, %d more lines)", len(lines)-maxLines)
+			fmt.Printf("      Output: %s\n", strings.Join(lines[:maxLines], "\n      "))
+			fmt.Printf("      ... (output truncated, %d more lines)\n", len(lines)-maxLines)
 		} else {
-			printLine("      Output: %s", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
+			fmt.Printf("      Output: %s\n", strings.ReplaceAll(output.Stdout, "\n", "\n      "))
 		}
 	}
 
 	if output.Stderr != "" && output.Stderr != output.FailReason {
-		printLine("      Error: %s", output.Stderr)
+		fmt.Printf("      Error: %s\n", output.Stderr)
 	}
 }
 
@@ -1167,12 +1251,12 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 		result := results[checkName]
 		// Display single failed check inline
 		displayName := strings.ReplaceAll(checkName, "_", " ")
-		printLine("🔸 %s", displayName)
-		printLine("   🐞 Problem: %s", result.Reason)
+		fmt.Printf("🔸 %s\n", displayName)
+		fmt.Printf("   🐞 Problem: %s\n", result.Reason)
 
 		// Show evidence - command and output for failed checks
 		if len(result.Outputs) > 0 {
-			printLine("   💻 Evidence:")
+			fmt.Println("   💻 Evidence:")
 			failedCount := 0
 			for idx, output := range result.Outputs {
 				// Skip outputs that didn't fail
@@ -1186,7 +1270,7 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 				if failedCount < len(result.Outputs) && len(result.Outputs) > 1 {
 					for j := idx + 1; j < len(result.Outputs); j++ {
 						if result.Outputs[j].Failed {
-							printLine("")
+							fmt.Println()
 							break
 						}
 					}
@@ -1195,28 +1279,130 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 		}
 
 		if len(result.Remediation) > 0 {
-			printLine("")
-			printLine("   🔧 How to fix:")
+			fmt.Println()
+			fmt.Println("   🔧 How to fix:")
 			for j, step := range result.Remediation {
-				printLine("      %d. %s", j+1, step)
+				fmt.Printf("      %d. %s\n", j+1, step)
 			}
 		}
 
 		// Add spacing between issues (but not after the last one)
 		if index < len(failedChecks)-1 {
-			printLine("")
-			printLine("   ─────────────────────────")
-			printLine("")
+			fmt.Println()
+			fmt.Println("   ─────────────────────────")
+			fmt.Println()
 		}
 	}
 }
 
 // displayAllChecks shows all checks in verbose mode.
+// getStatusDisplay returns the icon and color text for a status.
+func getStatusDisplay(status string) (icon, color string) {
+	switch status {
+	case statusPass:
+		return "✅", "PASS"
+	case statusFail:
+		return "❌", "FAIL"
+	default:
+		return "➖", "N/A"
+	}
+}
+
+// displayCommandOutput displays a single command output.
+func displayCommandOutput(output gitmdm.CommandOutput, index, total int) {
+	// Show command number if multiple
+	if total > 1 {
+		status := "OK"
+		if output.Failed {
+			status = "FAILED"
+		} else if output.Skipped || output.FileMissing {
+			status = "SKIPPED"
+		}
+		fmt.Printf("[Command %d of %d - %s]\n", index+1, total, status)
+	}
+
+	if output.Command != "" {
+		fmt.Printf("Command: %s\n", output.Command)
+	} else if output.File != "" {
+		fmt.Printf("File: %s\n", output.File)
+	}
+
+	switch {
+	case output.FileMissing:
+		fmt.Println("Result: File not found")
+	case output.Skipped:
+		fmt.Println("Result: Command not available")
+	default:
+		displayOutputContent(output)
+	}
+
+	switch {
+	case output.Failed:
+		fmt.Printf("Status: FAILED - %s\n", output.FailReason)
+	case output.Skipped, output.FileMissing:
+		fmt.Println("Status: SKIPPED")
+	default:
+		fmt.Println("Status: OK")
+	}
+	fmt.Println()
+}
+
+// displayOutputContent displays the stdout/stderr content of a command.
+func displayOutputContent(output gitmdm.CommandOutput) {
+	if output.Stdout != "" {
+		lines := strings.Split(strings.TrimRight(output.Stdout, "\n"), "\n")
+		if len(lines) > maxVerboseLines {
+			fmt.Printf("Output (%d lines, showing first 20):\n", len(lines))
+			for i := range maxVerboseLines {
+				fmt.Printf("  %s\n", lines[i])
+			}
+			fmt.Printf("  ... (%d more lines)\n", len(lines)-20)
+		} else {
+			fmt.Println("Output:")
+			for _, line := range lines {
+				fmt.Printf("  %s\n", line)
+			}
+		}
+	}
+
+	if output.Stderr != "" {
+		fmt.Printf("Stderr: %s\n", output.Stderr)
+	}
+
+	if output.ExitCode != 0 {
+		fmt.Printf("Exit Code: %d\n", output.ExitCode)
+	}
+}
+
+// displayRemediation displays remediation steps for a failed check.
+func displayRemediation(remediation []string) {
+	if len(remediation) == 0 {
+		return
+	}
+	fmt.Println("Remediation Steps:")
+	for i, step := range remediation {
+		fmt.Printf("  %d. %s\n", i+1, step)
+	}
+	fmt.Println()
+}
+
+// displayCheckSummary displays the summary of check results.
+func displayCheckSummary(summary CheckResultSummary) {
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println(" SUMMARY")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Printf("  Passed:         %d\n", summary.PassCount)
+	fmt.Printf("  Failed:         %d\n", summary.FailCount)
+	fmt.Printf("  Not Applicable: %d\n", summary.NACount)
+	fmt.Printf("  Total:          %d\n", summary.PassCount+summary.FailCount+summary.NACount)
+	fmt.Println()
+}
+
 func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []string, summary CheckResultSummary) {
-	printLine("═══════════════════════════════════════════════════════════════")
-	printLine(" COMPLIANCE CHECK RESULTS (Verbose Mode)")
-	printLine("═══════════════════════════════════════════════════════════════")
-	printLine("")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println(" COMPLIANCE CHECK RESULTS (Verbose Mode)")
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Println()
 
 	for _, checkName := range checkOrder {
 		result, exists := results[checkName]
@@ -1224,106 +1410,24 @@ func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []stri
 			continue
 		}
 
-		// Check header with status icon
-		var statusIcon string
-		var statusColor string
-		switch result.Status {
-		case statusPass:
-			statusIcon = "✅"
-			statusColor = "PASS"
-		case statusFail:
-			statusIcon = "❌"
-			statusColor = "FAIL"
-		default:
-			statusIcon = "➖"
-			statusColor = "N/A"
-		}
-
+		// Display check header inline
+		statusIcon, statusColor := getStatusDisplay(result.Status)
 		displayName := strings.ToUpper(strings.ReplaceAll(checkName, "_", " "))
-		printLine("%s %s [%s]", statusIcon, displayName, statusColor)
-		printLine("───────────────────────────────────────────────────────────────")
+		fmt.Printf("%s %s [%s]\n", statusIcon, displayName, statusColor)
+		fmt.Println("───────────────────────────────────────────────────────────────")
 
 		// Show all command outputs
 		for i, output := range result.Outputs {
-			// Show command number if multiple
-			if len(result.Outputs) > 1 {
-				status := "OK"
-				if output.Failed {
-					status = "FAILED"
-				} else if output.Skipped || output.FileMissing {
-					status = "SKIPPED"
-				}
-				printLine("[Command %d of %d - %s]", i+1, len(result.Outputs), status)
-			}
-
-			if output.Command != "" {
-				printLine("Command: %s", output.Command)
-			} else if output.File != "" {
-				printLine("File: %s", output.File)
-			}
-
-			switch {
-			case output.FileMissing:
-				printLine("Result: File not found")
-			case output.Skipped:
-				printLine("Result: Command not available")
-			default:
-				// Show output
-				if output.Stdout != "" {
-					lines := strings.Split(strings.TrimRight(output.Stdout, "\n"), "\n")
-					if len(lines) > maxVerboseLines {
-						printLine("Output (%d lines, showing first 20):", len(lines))
-						for i := range maxVerboseLines {
-							printLine("  %s", lines[i])
-						}
-						printLine("  ... (%d more lines)", len(lines)-20)
-					} else {
-						printLine("Output:")
-						for _, line := range lines {
-							printLine("  %s", line)
-						}
-					}
-				}
-
-				if output.Stderr != "" {
-					printLine("Stderr: %s", output.Stderr)
-				}
-
-				if output.ExitCode != 0 {
-					printLine("Exit Code: %d", output.ExitCode)
-				}
-			}
-
-			switch {
-			case output.Failed:
-				printLine("Status: FAILED - %s", output.FailReason)
-			case output.Skipped, output.FileMissing:
-				printLine("Status: SKIPPED")
-			default:
-				printLine("Status: OK")
-			}
-			printLine("")
+			displayCommandOutput(output, i, len(result.Outputs))
 		}
 
 		// Show remediation if failed
-		if result.Status == statusFail && len(result.Remediation) > 0 {
-			printLine("Remediation Steps:")
-			for i, step := range result.Remediation {
-				printLine("  %d. %s", i+1, step)
-			}
-			printLine("")
+		if result.Status == statusFail {
+			displayRemediation(result.Remediation)
 		}
 
-		printLine("")
+		fmt.Println()
 	}
 
-	// Summary at the end
-	printLine("═══════════════════════════════════════════════════════════════")
-	printLine(" SUMMARY")
-	printLine("═══════════════════════════════════════════════════════════════")
-	printLine("  Passed:         %d", summary.PassCount)
-	printLine("  Failed:         %d", summary.FailCount)
-	printLine("  Not Applicable: %d", summary.NACount)
-	printLine("  Total:          %d", summary.PassCount+summary.FailCount+summary.NACount)
-	printLine("")
+	displayCheckSummary(summary)
 }

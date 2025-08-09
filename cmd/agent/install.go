@@ -72,7 +72,11 @@ func installExecutable(exePath, targetPath string) error {
 	}
 
 	// Try direct copy first
-	if err := copyFile(exePath, targetPath); err != nil {
+	data, err := os.ReadFile(exePath)
+	if err != nil {
+		return fmt.Errorf("failed to read executable: %w", err)
+	}
+	if err := os.WriteFile(targetPath, data, 0o755); err != nil { //nolint:gosec // executable needs execute permission
 		// Handle "text file busy" error by copying to temp and renaming
 		if !strings.Contains(strings.ToLower(err.Error()), "text file busy") {
 			return fmt.Errorf("failed to copy executable: %w", err)
@@ -80,7 +84,7 @@ func installExecutable(exePath, targetPath string) error {
 
 		// Copy to temp file and rename
 		tempPath := targetPath + ".new"
-		if err := copyFile(exePath, tempPath); err != nil {
+		if err := os.WriteFile(tempPath, data, 0o755); err != nil { //nolint:gosec // executable needs execute permission
 			return fmt.Errorf("failed to copy executable to temp file: %w", err)
 		}
 		if err := os.Rename(tempPath, targetPath); err != nil {
@@ -206,15 +210,6 @@ func uninstallAgent() error {
 	_ = os.Remove(targetDir) //nolint:errcheck // Directory might not be empty, that's OK
 
 	return nil
-}
-
-// copyFile copies a file from src to dst.
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0o755) //nolint:gosec // executable needs execute permission
 }
 
 // isSystemdUserAvailable checks if systemd user services are available and working.

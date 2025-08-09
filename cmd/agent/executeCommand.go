@@ -48,6 +48,98 @@ func securePath() string {
 	}
 }
 
+// isShellBuiltin checks if a command is a shell builtin.
+func isShellBuiltin(cmd string) bool {
+	shellBuiltins := map[string]bool{
+		"echo": true, "test": true, "[": true, "[[": true, "if": true,
+		"then": true, "else": true, "fi": true, "for": true, "while": true,
+		"do": true, "done": true, "case": true, "esac": true, "function": true,
+		"return": true, "break": true, "continue": true, "exit": true,
+		"source": true, ".": true, "eval": true, "exec": true, "export": true,
+		"unset": true, "shift": true, "cd": true, "pwd": true, "read": true,
+		"readonly": true, "declare": true, "typeset": true, "local": true,
+		"true": true, "false": true, "type": true, "command": true,
+		// Include sudo and doas since they're commonly used
+		"sudo": true, "doas": true,
+	}
+	return shellBuiltins[cmd]
+}
+
+// logCommandOutput logs command output for debugging.
+func logCommandOutput(checkName, command, stdout, stderr string, exitCode int, duration time.Duration) {
+	if quiet {
+		return
+	}
+
+	prefix := ""
+	if checkName != "" {
+		prefix = fmt.Sprintf("[%s] ", checkName)
+	}
+
+	// Log non-empty stdout
+	if stdout != "" && strings.TrimSpace(stdout) != "" {
+		trimmed := strings.TrimSpace(stdout)
+		if len(trimmed) > maxLogLength {
+			trimmed = trimmed[:maxLogLength] + "..."
+		}
+		log.Printf("[INFO] %sstdout (%d bytes): %s", prefix, len(stdout), trimmed)
+	}
+
+	// Log non-empty stderr
+	if stderr != "" && strings.TrimSpace(stderr) != "" {
+		trimmed := strings.TrimSpace(stderr)
+		if len(trimmed) > maxLogLength {
+			trimmed = trimmed[:maxLogLength] + "..."
+		}
+		log.Printf("[INFO] %sstderr (%d bytes): %s", prefix, len(stderr), trimmed)
+	}
+
+	if *debugMode {
+		log.Printf("[DEBUG] Command completed in %v (exit: %d, stdout: %d bytes, stderr: %d bytes): %s",
+			duration, exitCode, len(stdout), len(stderr), command)
+	}
+}
+
+// validateCommand checks if a command exists in PATH.
+func validateCommand(checkName, command string) *gitmdm.CommandOutput {
+	if containsShellOperators(command) {
+		return nil // Commands with shell operators need shell interpretation
+	}
+
+	commandParts := strings.Fields(command)
+	if len(commandParts) == 0 {
+		return nil
+	}
+
+	primaryCmd := commandParts[0]
+	if isShellBuiltin(primaryCmd) || strings.Contains(primaryCmd, "/") {
+		return nil // Shell builtins and absolute paths don't need validation
+	}
+
+	// Temporarily set PATH for LookPath
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", securePath()); err != nil {
+		log.Printf("[WARN] Failed to set PATH for command check: %v", err)
+	}
+	_, lookupErr := exec.LookPath(primaryCmd)
+	if err := os.Setenv("PATH", oldPath); err != nil {
+		log.Printf("[WARN] Failed to restore PATH: %v", err)
+	}
+
+	if lookupErr != nil {
+		if *debugMode {
+			log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
+		}
+		return &gitmdm.CommandOutput{
+			Command:  command,
+			Stdout:   "",
+			Stderr:   fmt.Sprintf("Skipped: %s not found", primaryCmd),
+			ExitCode: -2, // Special exit code for skipped
+		}
+	}
+	return nil
+}
+
 // executeCommandWithPipes executes a command and captures stdout/stderr separately.
 // SECURITY: Commands come from checks.yaml which must be controlled by the system admin.
 // We set a minimal secure PATH to prevent PATH-based attacks.
@@ -55,53 +147,9 @@ func securePath() string {
 func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command string) gitmdm.CommandOutput {
 	start := time.Now()
 
-	// Skip PATH checking if the command contains shell operators
-	// These commands need shell interpretation and can't be validated simply
-	if !containsShellOperators(command) {
-		// Extract the primary command (first word) to check if it exists
-		commandParts := strings.Fields(command)
-		if len(commandParts) > 0 {
-			primaryCmd := commandParts[0]
-
-			// Check if this is a shell builtin or special command
-			shellBuiltins := map[string]bool{
-				"echo": true, "test": true, "[": true, "[[": true, "if": true,
-				"then": true, "else": true, "fi": true, "for": true, "while": true,
-				"do": true, "done": true, "case": true, "esac": true, "function": true,
-				"return": true, "break": true, "continue": true, "exit": true,
-				"source": true, ".": true, "eval": true, "exec": true, "export": true,
-				"unset": true, "shift": true, "cd": true, "pwd": true, "read": true,
-				"readonly": true, "declare": true, "typeset": true, "local": true,
-				"true": true, "false": true, "type": true, "command": true,
-				// Include sudo and doas since they're commonly used
-				"sudo": true, "doas": true,
-			}
-
-			// If it's not a shell builtin and not a path, check if the command exists
-			if !shellBuiltins[primaryCmd] && !strings.Contains(primaryCmd, "/") {
-				// Temporarily set PATH for LookPath
-				oldPath := os.Getenv("PATH")
-				if err := os.Setenv("PATH", securePath()); err != nil {
-					log.Printf("[WARN] Failed to set PATH for command check: %v", err)
-				}
-				_, lookupErr := exec.LookPath(primaryCmd)
-				if err := os.Setenv("PATH", oldPath); err != nil {
-					log.Printf("[WARN] Failed to restore PATH: %v", err)
-				}
-
-				if lookupErr != nil {
-					if *debug {
-						log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
-					}
-					return gitmdm.CommandOutput{
-						Command:  command,
-						Stdout:   "",
-						Stderr:   fmt.Sprintf("Skipped: %s not found", primaryCmd),
-						ExitCode: -2, // Special exit code for skipped
-					}
-				}
-			}
-		}
+	// Validate command exists
+	if result := validateCommand(checkName, command); result != nil {
+		return *result
 	}
 
 	// Use longer timeout for software update checks (they contact remote servers)
@@ -113,7 +161,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Executing command: %s", command)
 	}
 
@@ -131,7 +179,7 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 
 	// Set a secure, minimal PATH for the subprocess
 	securePath := securePath()
-	if *debug {
+	if *debugMode {
 		log.Printf("[DEBUG] Using secure PATH for %s: %s", runtime.GOOS, securePath)
 	}
 	cmd.Env = append(os.Environ(), "PATH="+securePath)
@@ -181,34 +229,8 @@ func (*Agent) executeCommandWithPipes(ctx context.Context, checkName, command st
 		}
 	}
 
-	// Log stdout/stderr for debugging with check name
-	prefix := ""
-	if checkName != "" {
-		prefix = fmt.Sprintf("[%s] ", checkName)
-	}
-
-	// Only log non-empty outputs (unless in quiet mode)
-	if !quiet {
-		if stdout != "" && strings.TrimSpace(stdout) != "" {
-			trimmed := strings.TrimSpace(stdout)
-			if len(trimmed) > maxLogLength {
-				trimmed = trimmed[:maxLogLength] + "..."
-			}
-			log.Printf("[INFO] %sstdout (%d bytes): %s", prefix, len(stdout), trimmed)
-		}
-		if stderr != "" && strings.TrimSpace(stderr) != "" {
-			trimmed := strings.TrimSpace(stderr)
-			if len(trimmed) > maxLogLength {
-				trimmed = trimmed[:maxLogLength] + "..."
-			}
-			log.Printf("[INFO] %sstderr (%d bytes): %s", prefix, len(stderr), trimmed)
-		}
-	}
-
-	if *debug {
-		log.Printf("[DEBUG] Command completed in %v (exit: %d, stdout: %d bytes, stderr: %d bytes): %s",
-			duration, exitCode, len(stdout), len(stderr), command)
-	}
+	// Log command output
+	logCommandOutput(checkName, command, stdout, stderr, exitCode, duration)
 
 	return gitmdm.CommandOutput{
 		Command:  command,

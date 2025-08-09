@@ -17,7 +17,7 @@ type Config struct {
 // - A comma-separated list like "linux,freebsd"
 // - "unix" for all Unix-like systems
 // - "all" for all systems.
-type CheckDefinition map[string]interface{}
+type CheckDefinition map[string]any
 
 // CommandRule defines a single command or file check with evaluation criteria.
 type CommandRule struct {
@@ -32,14 +32,6 @@ type CommandRule struct {
 
 	// Remediation steps specific to this rule
 	Remediation []string `yaml:"remediation,omitempty"`
-}
-
-// Description returns the description for this check.
-func (cd CheckDefinition) Description() string {
-	if desc, ok := cd["description"].(string); ok {
-		return desc
-	}
-	return ""
 }
 
 // CommandsForOS returns the command rules for a specific OS.
@@ -91,7 +83,7 @@ func (cd CheckDefinition) parseRules(key string) []CommandRule {
 	}
 
 	// The value should be a slice of rule maps
-	slice, ok := val.([]interface{})
+	slice, ok := val.([]any)
 	if !ok {
 		return nil
 	}
@@ -103,14 +95,14 @@ func (cd CheckDefinition) parseRules(key string) []CommandRule {
 	var rules []CommandRule
 	for _, item := range slice {
 		// Each item should be a map
-		var ruleMap map[string]interface{}
+		var ruleMap map[string]any
 
 		switch m := item.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			ruleMap = m
-		case map[interface{}]interface{}:
+		case map[any]any:
 			// Convert to map[string]interface{}
-			ruleMap = make(map[string]interface{})
+			ruleMap = make(map[string]any)
 			for k, v := range m {
 				if ks, ok := k.(string); ok {
 					ruleMap[ks] = v
@@ -118,7 +110,7 @@ func (cd CheckDefinition) parseRules(key string) []CommandRule {
 			}
 		case CheckDefinition:
 			// It's another CheckDefinition, treat it as a map
-			ruleMap = map[string]interface{}(m)
+			ruleMap = map[string]any(m)
 		default:
 			continue
 		}
@@ -156,7 +148,7 @@ func (cd CheckDefinition) parseRules(key string) []CommandRule {
 		}
 
 		// Handle remediation array
-		if rem, ok := ruleMap["remediation"].([]interface{}); ok {
+		if rem, ok := ruleMap["remediation"].([]any); ok {
 			for _, r := range rem {
 				if str, ok := r.(string); ok {
 					rule.Remediation = append(rule.Remediation, str)

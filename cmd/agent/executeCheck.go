@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	"gitmdm/internal/analyzer"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/analyzer"
+	"github.com/codeGROOVE-dev/gitMDM/internal/config"
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 )
 
 // executeCheck executes a single check rule (command or file) and returns the output.

@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gitmdm/internal/gitmdm"
 	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 )
 
 // containsShellOperators checks if a command contains shell operators that indicate

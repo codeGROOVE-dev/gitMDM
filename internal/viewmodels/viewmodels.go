@@ -2,12 +2,13 @@
 package viewmodels
 
 import (
-	"gitmdm/internal/gitmdm"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 )
 
 const (

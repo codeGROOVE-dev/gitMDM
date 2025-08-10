@@ -3,12 +3,13 @@ package analyzer
 
 import (
 	"fmt"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 	"log"
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/config"
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 )
 
 var debug = os.Getenv("DEBUG") == "true"

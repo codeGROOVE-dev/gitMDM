@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"gitmdm/internal/gitmdm"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
 	"github.com/go-git/go-git/v5"

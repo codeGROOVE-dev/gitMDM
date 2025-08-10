@@ -1,5 +1,11 @@
 # gitMDM
 
+![Experimental](https://img.shields.io/badge/status-experimental-orange)
+![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/gitMDM)
+![License](https://img.shields.io/github/license/codeGROOVE-dev/gitMDM)
+![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/gitMDM)
+![Platform Support](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20bsd%20%7C%20windows-blue)
+
 A security-first MDM that proves compliance without compromising your infrastructure.
 
 ![logo](./media/logo_small.png "gitMDM logo")
@@ -86,7 +92,7 @@ We love Google Cloud Run for our deployment story - check out `./hacks/deploy.sh
 Attackers can read compliance reports and delete them. That's it. They cannot push commands, install software, or access agent machines.
 
 **Why not just use osquery?**
-osquery is powerful but requires careful configuration to avoid information leakage. gitMDM is purpose-built for compliance with security as the primary design constraint.
+osquery is a great platform to build an MDM on top of, but its cross-platform support is limited.
 
 **How do you prevent supply chain attacks?**
 Agents are built from source, checks are compiled in, and with Sigstore integration, all configurations are cryptographically signed with identity verification. Minimal dependencies.

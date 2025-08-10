@@ -1,4 +1,4 @@
-.PHONY: all build server agent clean test lint run-server run-agent help
+.PHONY: all build server agent sign clean test lint run-server run-agent help
 
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -9,14 +9,16 @@ GOMOD=$(GOCMD) mod
 
 SERVER_BINARY=./out/gitmdm-server
 AGENT_BINARY=./out/gitmdm-agent
+SIGN_BINARY=./out/gitmdm-sign
 SERVER_PATH=./cmd/server
 AGENT_PATH=./cmd/agent
+SIGN_PATH=./cmd/sign
 
 BUILD_FLAGS=-ldflags="-s -w" -trimpath
 
 all: build
 
-build: server agent
+build: server agent sign
 
 server:
 	$(GOBUILD) $(BUILD_FLAGS) -o $(SERVER_BINARY) $(SERVER_PATH)
@@ -24,10 +26,14 @@ server:
 agent:
 	$(GOBUILD) $(BUILD_FLAGS) -o $(AGENT_BINARY) $(AGENT_PATH)
 
+sign:
+	$(GOBUILD) $(BUILD_FLAGS) -o $(SIGN_BINARY) $(SIGN_PATH)
+
 clean:
 	$(GOCLEAN)
 	rm -f $(SERVER_BINARY)
 	rm -f $(AGENT_BINARY)
+	rm -f $(SIGN_BINARY)
 
 test:
 	$(GOTEST) -v ./...

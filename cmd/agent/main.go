@@ -562,17 +562,16 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Process all queued reports
+			// Drain all queued reports
 			for {
 				select {
 				case report := <-a.failedReports:
 					a.retryFailedReport(ctx, report)
 				default:
-					// No more reports to process
-					goto nextTick
+					goto drained
 				}
 			}
-		nextTick:
+		drained:
 		}
 	}
 }
@@ -1394,19 +1393,6 @@ func (*Agent) displayFailedChecks(results map[string]CheckResult, finalOrder []s
 	}
 }
 
-// displayAllChecks shows all checks in verbose mode.
-// getStatusDisplay returns the icon and color text for a status.
-func getStatusDisplay(status string) (icon, color string) {
-	switch status {
-	case statusPass:
-		return "✅", "PASS"
-	case statusFail:
-		return "❌", "FAIL"
-	default:
-		return "➖", "N/A"
-	}
-}
-
 // displayCommandOutput displays a single command output.
 func displayCommandOutput(output gitmdm.CommandOutput, index, total int) {
 	// Show command number if multiple
@@ -1510,7 +1496,15 @@ func (*Agent) displayAllChecks(results map[string]CheckResult, checkOrder []stri
 		}
 
 		// Display check header inline
-		statusIcon, statusColor := getStatusDisplay(result.Status)
+		var statusIcon, statusColor string
+		switch result.Status {
+		case statusPass:
+			statusIcon, statusColor = "✅", "PASS"
+		case statusFail:
+			statusIcon, statusColor = "❌", "FAIL"
+		default:
+			statusIcon, statusColor = "➖", "N/A"
+		}
 		displayName := strings.ToUpper(strings.ReplaceAll(checkName, "_", " "))
 		fmt.Printf("%s %s [%s]\n", statusIcon, displayName, statusColor)
 		fmt.Println("───────────────────────────────────────────────────────────────")

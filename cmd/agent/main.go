@@ -286,6 +286,52 @@ func setupLogging() (*os.File, error) {
 	return logFile, nil
 }
 
+// checkAndCreatePIDFile checks if another instance is running and creates a PID file.
+// Returns true if we should continue running, false if another instance is active.
+func checkAndCreatePIDFile() (exists bool, cleanup func()) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("[WARN] Failed to get home directory for PID file: %v", err)
+		return true, func() {} // Continue without PID file
+	}
+
+	pidPath := filepath.Join(homeDir, ".gitmdm", "agent.pid")
+	// Check if PID file exists and if that process is still running
+	if pidData, err := os.ReadFile(pidPath); err == nil {
+		oldPID, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+		if err == nil {
+			// Check if process exists by sending signal 0
+			if process, err := os.FindProcess(oldPID); err == nil {
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					log.Printf("[INFO] Agent already running with PID %d, exiting", oldPID)
+					return false, func() {}
+				}
+			}
+			log.Printf("[INFO] Removing stale PID file for non-existent process %d", oldPID)
+		}
+	}
+
+	// Write our PID
+	pid := os.Getpid()
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		log.Printf("[WARN] Failed to write PID file: %v", err)
+		return true, func() {} // Continue without PID file
+	}
+
+	log.Printf("[INFO] Created PID file with PID %d", pid)
+
+	// Return cleanup function
+	cleanup = func() {
+		if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[WARN] Failed to remove PID file: %v", err)
+		} else {
+			log.Print("[INFO] Removed PID file")
+		}
+	}
+
+	return true, cleanup
+}
+
 func main() {
 	// Set up panic recovery first
 	defer func() {
@@ -364,6 +410,13 @@ func main() {
 	if err := agent.configureServerConnection(); err != nil {
 		log.Fatal(err)
 	}
+
+	// Check PID file to avoid duplicate processes
+	shouldRun, cleanupPID := checkAndCreatePIDFile()
+	if !shouldRun {
+		return // Another instance is already running
+	}
+	defer cleanupPID()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

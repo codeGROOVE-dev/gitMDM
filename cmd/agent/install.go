@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"text/template"
 	"time"
 )
@@ -300,10 +302,12 @@ func installMacOS(agentPath, serverURL, joinKey string) error {
 		return fmt.Errorf("failed to write plist: %w", err)
 	}
 
-	// Load the launch agent
+	// Load the launch agent (this starts it immediately due to RunAtLoad=true)
+	log.Printf("[INFO] Loading launch agent from %s", plistPath)
 	cmd := exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
 	if _, err := cmd.CombinedOutput(); err != nil {
 		// Try to unload first in case it's already loaded
+		log.Print("[INFO] Agent may already be loaded, attempting to unload first")
 		_ = exec.Command("launchctl", "unload", plistPath).Run() //nolint:errcheck,noctx // Best effort
 		// Try loading again
 		cmd = exec.Command("launchctl", "load", plistPath) //nolint:noctx // local command
@@ -311,6 +315,7 @@ func installMacOS(agentPath, serverURL, joinKey string) error {
 			return fmt.Errorf("failed to load launch agent: %w\nOutput: %s", err, output)
 		}
 	}
+	log.Print("[INFO] Launch agent loaded successfully - agent should be running now")
 
 	return nil
 }
@@ -408,10 +413,12 @@ WantedBy=default.target
 	}
 
 	// Start service
+	log.Print("[INFO] Starting systemd service")
 	cmd = exec.Command("systemctl", "--user", "start", "gitmdm-agent.service") //nolint:noctx // local command
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to start service: %w", err)
 	}
+	log.Print("[INFO] Systemd service started successfully")
 
 	return nil
 }
@@ -463,13 +470,19 @@ func installCron(agentPath, _, _ string) error {
 		return nil // Already installed
 	}
 
-	// Add new cron job (without sensitive data in command line)
-	newEntry := fmt.Sprintf("@reboot %s", agentPath)
+	// Add new cron jobs: run at reboot and every 15 minutes
+	// The PID file mechanism in the agent prevents duplicate processes
+	entries := []string{
+		fmt.Sprintf("@reboot %s", agentPath),
+		fmt.Sprintf("*/15 * * * * %s", agentPath), // Every 15 minutes
+	}
 	newCron := currentCron
 	if !strings.HasSuffix(newCron, "\n") && newCron != "" {
 		newCron += "\n"
 	}
-	newCron += newEntry + "\n"
+	for _, entry := range entries {
+		newCron += entry + "\n"
+	}
 
 	// Install new crontab
 	cmd = exec.Command("crontab", "-") //nolint:noctx // local command
@@ -479,15 +492,52 @@ func installCron(agentPath, _, _ string) error {
 	}
 
 	// Try to start the agent immediately in background
-	// Security note: agentPath is constructed from filepath.Join with constants,
-	// but we use exec.Command directly to avoid shell injection risks
-	cmd = exec.Command(agentPath) //nolint:noctx // agent spawns its own context
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err == nil {
-		// Detach from the process
-		_ = cmd.Process.Release() //nolint:errcheck // best effort cleanup
+	// Use nohup to ensure the process survives after installer exits
+	log.Printf("[INFO] Starting agent in background: %s", agentPath)
+
+	// Check if nohup is available
+	nohupPath, nohupErr := exec.LookPath("nohup")
+	if nohupErr == nil {
+		// Use nohup with proper detachment
+		cmd = exec.Command(nohupPath, agentPath) //nolint:noctx // agent spawns its own context
+		cmd.Stdin = nil
+		// Redirect stdout/stderr to /dev/null to fully detach
+		devNull, err := os.Open("/dev/null")
+		if err == nil {
+			cmd.Stdout = devNull
+			cmd.Stderr = devNull
+			defer func() { _ = devNull.Close() }() //nolint:errcheck // defer close
+		}
+
+		// Set process group to detach from parent
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setpgid: true,
+		}
+
+		if err := cmd.Start(); err == nil {
+			// Process started successfully
+			log.Printf("[INFO] Agent started successfully with PID %d using nohup", cmd.Process.Pid)
+			// Don't wait for it to finish
+			go func() {
+				_ = cmd.Wait() //nolint:errcheck // Reap the child when it exits
+			}()
+		} else {
+			log.Printf("[WARN] Failed to start agent with nohup: %v", err)
+		}
+	} else {
+		// Fallback to direct execution without nohup
+		cmd = exec.Command(agentPath) //nolint:noctx // agent spawns its own context
+		cmd.Stdin = nil
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+
+		if err := cmd.Start(); err == nil {
+			// Detach from the process
+			_ = cmd.Process.Release() //nolint:errcheck // best effort cleanup
+			log.Printf("[INFO] Agent started successfully with PID %d (without nohup)", cmd.Process.Pid)
+		} else {
+			log.Printf("[WARN] Failed to start agent immediately: %v (will start via cron in 15 minutes)", err)
+		}
 	}
 
 	return nil

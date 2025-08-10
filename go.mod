@@ -1,4 +1,4 @@
-module gitmdm
+module github.com/codeGROOVE-dev/gitMDM
 
 go 1.23.0
 

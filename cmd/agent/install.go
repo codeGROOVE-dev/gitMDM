@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"text/template"
 	"time"
 )
@@ -453,21 +452,31 @@ func uninstallLinux() error {
 	return nil
 }
 
+const crontabCmd = "crontab"
+
 // installCron installs a cron job (fallback for systems without systemd/launchd).
 func installCron(agentPath, _, _ string) error {
 	// Check if crontab is available
-	if _, err := exec.LookPath("crontab"); err != nil {
+	if _, err := exec.LookPath(crontabCmd); err != nil {
 		return errors.New("neither systemd user services nor cron are available - manual startup required")
 	}
 
 	// Get current crontab
-	cmd := exec.Command("crontab", "-l") //nolint:noctx // local command
-	output, _ := cmd.Output()            //nolint:errcheck // Ignore error - no crontab is fine
+	cmd := exec.Command(crontabCmd, "-l") //nolint:noctx // local command
+	output, _ := cmd.Output()             //nolint:errcheck // Ignore error - no crontab is fine
 	currentCron := string(output)
 
-	// Check if already installed
-	if strings.Contains(currentCron, agentPath) {
-		return nil // Already installed
+	// Check if already installed - look for the agent name in the crontab
+	if strings.Contains(currentCron, agentName) {
+		log.Printf("[INFO] Cron job for %s already installed, updating entries", agentName)
+		// Remove old entries to replace with new ones
+		var filteredLines []string
+		for _, line := range strings.Split(currentCron, "\n") {
+			if !strings.Contains(line, agentName) {
+				filteredLines = append(filteredLines, line)
+			}
+		}
+		currentCron = strings.Join(filteredLines, "\n")
 	}
 
 	// Add new cron jobs: run at reboot and every 15 minutes
@@ -485,59 +494,60 @@ func installCron(agentPath, _, _ string) error {
 	}
 
 	// Install new crontab
-	cmd = exec.Command("crontab", "-") //nolint:noctx // local command
+	log.Printf("[INFO] Installing cron entries for %s", agentPath)
+	cmd = exec.Command(crontabCmd, "-") //nolint:noctx // local command
 	cmd.Stdin = strings.NewReader(newCron)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install crontab: %w", err)
 	}
+	log.Print("[INFO] Cron entries installed successfully")
+
+	// Verify the crontab was actually installed
+	cmd = exec.Command(crontabCmd, "-l") //nolint:noctx // local command
+	if output, err := cmd.Output(); err == nil {
+		if strings.Contains(string(output), agentPath) {
+			log.Print("[INFO] Cron entries verified in crontab")
+		} else {
+			log.Print("[WARN] Cron entries not found in crontab after installation")
+		}
+	}
 
 	// Try to start the agent immediately in background
-	// Use nohup to ensure the process survives after installer exits
 	log.Printf("[INFO] Starting agent in background: %s", agentPath)
 
-	// Check if nohup is available
-	nohupPath, nohupErr := exec.LookPath("nohup")
-	if nohupErr == nil {
-		// Use nohup with proper detachment
-		cmd = exec.Command(nohupPath, agentPath) //nolint:noctx // agent spawns its own context
-		cmd.Stdin = nil
-		// Redirect stdout/stderr to /dev/null to fully detach
-		devNull, err := os.Open("/dev/null")
-		if err == nil {
-			cmd.Stdout = devNull
-			cmd.Stderr = devNull
-			defer func() { _ = devNull.Close() }() //nolint:errcheck // defer close
-		}
+	// Check if nohup is available (it should be on all Unix-like systems including FreeBSD)
+	nohupPath, err := exec.LookPath("nohup")
+	if err != nil {
+		log.Printf("[WARN] nohup not found, agent will start via cron in 15 minutes: %v", err)
+		return nil
+	}
 
-		// Set process group to detach from parent
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setpgid: true,
-		}
+	// Get the directory where the agent is installed
+	agentDir := filepath.Dir(agentPath)
+	agentBinary := filepath.Base(agentPath)
 
-		if err := cmd.Start(); err == nil {
-			// Process started successfully
-			log.Printf("[INFO] Agent started successfully with PID %d using nohup", cmd.Process.Pid)
-			// Don't wait for it to finish
-			go func() {
-				_ = cmd.Wait() //nolint:errcheck // Reap the child when it exits
-			}()
-		} else {
-			log.Printf("[WARN] Failed to start agent with nohup: %v", err)
-		}
+	// Use nohup with shell to properly background the process
+	// Change to the agent directory first so PID file and logs are created in the right place
+	// The & is crucial for detaching from the parent process
+	shellCmd := fmt.Sprintf("cd %s && %s ./%s > /dev/null 2>&1 &", agentDir, nohupPath, agentBinary)
+	cmd = exec.Command("sh", "-c", shellCmd) //nolint:noctx // agent spawns its own context
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("[WARN] Failed to start agent with nohup: %v (will start via cron in 15 minutes)", err)
+		return nil
+	}
+
+	log.Print("[INFO] Agent started successfully in background using nohup")
+
+	// Give it a moment to start
+	time.Sleep(500 * time.Millisecond)
+	// Verify the process is running
+	checkCmd := exec.Command("pgrep", "-f", agentName) //nolint:noctx // local command
+	if output, err := checkCmd.Output(); err == nil && len(output) > 0 {
+		pids := strings.TrimSpace(string(output))
+		log.Printf("[INFO] Agent process confirmed running with PID(s): %s", pids)
 	} else {
-		// Fallback to direct execution without nohup
-		cmd = exec.Command(agentPath) //nolint:noctx // agent spawns its own context
-		cmd.Stdin = nil
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-
-		if err := cmd.Start(); err == nil {
-			// Detach from the process
-			_ = cmd.Process.Release() //nolint:errcheck // best effort cleanup
-			log.Printf("[INFO] Agent started successfully with PID %d (without nohup)", cmd.Process.Pid)
-		} else {
-			log.Printf("[WARN] Failed to start agent immediately: %v (will start via cron in 15 minutes)", err)
-		}
+		log.Print("[WARN] Could not confirm agent is running, but it may have started successfully")
 	}
 
 	return nil
@@ -546,7 +556,7 @@ func installCron(agentPath, _, _ string) error {
 // uninstallCron removes cron job.
 func uninstallCron() error {
 	// Get current crontab
-	cmd := exec.Command("crontab", "-l") //nolint:noctx // local command
+	cmd := exec.Command(crontabCmd, "-l") //nolint:noctx // local command
 	output, err := cmd.Output()
 	if err != nil {
 		return nil //nolint:nilerr // No crontab, nothing to remove
@@ -567,9 +577,9 @@ func uninstallCron() error {
 	// Install updated crontab
 	if strings.TrimSpace(newCron) == "" {
 		// Remove crontab entirely if empty
-		_ = exec.Command("crontab", "-r").Run() //nolint:errcheck,noctx // Best effort
+		_ = exec.Command(crontabCmd, "-r").Run() //nolint:errcheck,noctx // Best effort
 	} else {
-		cmd = exec.Command("crontab", "-") //nolint:noctx // local command
+		cmd = exec.Command(crontabCmd, "-") //nolint:noctx // local command
 		cmd.Stdin = strings.NewReader(newCron)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to update crontab: %w", err)

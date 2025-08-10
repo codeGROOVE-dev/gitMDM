@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -55,10 +56,10 @@ const (
 	maxLogLength = 200
 	// Minimum parts required for IOPlatformUUID parsing.
 	minUUIDParts = 4
-	// Retry configuration.
-	maxRetries     = 3
+	// Retry configuration - using exponential backoff with jitter up to 2 minutes total.
+	maxRetries     = 7 // More attempts to handle transient failures
 	initialBackoff = 1 * time.Second
-	maxBackoff     = 2 * time.Minute // Wait up to 2 minutes with exponential backoff
+	maxBackoff     = 30 * time.Second // Per-retry max delay to fit within 2 minute total
 	// HTTP client timeout.
 	httpTimeout = 30 * time.Second
 	// Queue size for failed reports.
@@ -408,7 +409,10 @@ func main() {
 
 	// Configure server connection
 	if err := agent.configureServerConnection(); err != nil {
-		log.Fatal(err)
+		log.Printf("[ERROR] Failed to configure server connection: %v", err)
+		log.Print("[INFO] Agent will continue running in offline mode, collecting data locally")
+		// Continue in offline mode - we can still collect data even if server is not configured
+		agent.serverURL = ""
 	}
 
 	// Check PID file to avoid duplicate processes
@@ -467,6 +471,15 @@ func (a *Agent) reportToServer(ctx context.Context) {
 
 	if *debugMode {
 		log.Printf("[DEBUG] Generated report with %d checks in %v", len(report.Checks), time.Since(start))
+	}
+
+	// If no server configured (offline mode), just log the collection
+	if a.serverURL == "" {
+		log.Print("[INFO] Running in offline mode - data collected but not sent to server")
+		if *debugMode {
+			log.Printf("[DEBUG] Collected %d checks in offline mode", len(report.Checks))
+		}
+		return
 	}
 
 	retryCount := 0
@@ -598,9 +611,15 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 		log.Printf("[DEBUG] Running %d checks for OS: %s", len(a.config.Checks), osName)
 	}
 
+	// Use a mutex to protect the shared maps
+	var mu sync.Mutex
+	// Use a WaitGroup to wait for all checks to complete
+	var wg sync.WaitGroup
+	// Limit concurrency to avoid overwhelming the system
+	semaphore := make(chan struct{}, runtime.NumCPU())
+
 	for checkName := range a.config.Checks {
 		checkDef := a.config.Checks[checkName]
-		checkStart := time.Now()
 
 		// Get the rules for this OS
 		rules := checkDef.CommandsForOS(osName)
@@ -611,41 +630,57 @@ func (a *Agent) runAllChecks(ctx context.Context) map[string]gitmdm.Check {
 			continue
 		}
 
-		// Run all rules for this check
-		var outputs []gitmdm.CommandOutput
-		for _, rule := range rules {
-			output := a.executeCheck(ctx, checkName, rule)
-			outputs = append(outputs, output)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
 
-		// Analyze all outputs to determine status
-		status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
+			checkStart := time.Now()
 
-		check := gitmdm.Check{
-			Timestamp:   time.Now(), // Set the timestamp when the check was performed
-			Outputs:     outputs,
-			Status:      status,
-			Reason:      reason,
-			Remediation: remediation,
-		}
-		checks[checkName] = check
-
-		// Update counters based on status
-		switch status {
-		case statusPass:
-			successCount++
-			if *debugMode {
-				log.Printf("[DEBUG] Check %s passed in %v: %s", checkName, time.Since(checkStart), reason)
+			// Run all rules for this check
+			var outputs []gitmdm.CommandOutput
+			for _, rule := range rules {
+				output := a.executeCheck(ctx, checkName, rule)
+				outputs = append(outputs, output)
 			}
-		case statusFail:
-			failureCount++
-			if *debugMode {
-				log.Printf("[DEBUG] Check %s failed in %v: %s", checkName, time.Since(checkStart), reason)
+
+			// Analyze all outputs to determine status
+			status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
+
+			check := gitmdm.Check{
+				Timestamp:   time.Now(), // Set the timestamp when the check was performed
+				Outputs:     outputs,
+				Status:      status,
+				Reason:      reason,
+				Remediation: remediation,
 			}
-		default:
-			// "n/a" - no counter update
-		}
+
+			// Update shared state with mutex
+			mu.Lock()
+			checks[checkName] = check
+			// Update counters based on status
+			switch status {
+			case statusPass:
+				successCount++
+				if *debugMode {
+					log.Printf("[DEBUG] Check %s passed in %v: %s", checkName, time.Since(checkStart), reason)
+				}
+			case statusFail:
+				failureCount++
+				if *debugMode {
+					log.Printf("[DEBUG] Check %s failed in %v: %s", checkName, time.Since(checkStart), reason)
+				}
+			default:
+				// "n/a" - no counter update
+			}
+			mu.Unlock()
+		}()
 	}
+
+	// Wait for all checks to complete
+	wg.Wait()
 
 	log.Printf("[INFO] Completed %d checks (%d successful, %d failed) in %v",
 		successCount+failureCount, successCount, failureCount, time.Since(start))

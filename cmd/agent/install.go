@@ -524,20 +524,30 @@ func installCron(agentPath, _, _ string) error {
 
 	// Get the directory where the agent is installed
 	agentDir := filepath.Dir(agentPath)
-	agentBinary := filepath.Base(agentPath)
 
-	// Use nohup with shell to properly background the process
-	// Change to the agent directory first so PID file and logs are created in the right place
-	// The & is crucial for detaching from the parent process
-	shellCmd := fmt.Sprintf("cd %s && %s ./%s > /dev/null 2>&1 &", agentDir, nohupPath, agentBinary)
-	cmd = exec.Command("sh", "-c", shellCmd) //nolint:noctx // agent spawns its own context
+	// Start the agent directly with nohup, avoiding shell interpretation
+	cmd = exec.Command(nohupPath, agentPath) //nolint:noctx // agent spawns its own context
+	cmd.Dir = agentDir                       // Set working directory for PID file and logs
 
-	if err := cmd.Run(); err != nil {
+	// Redirect output to /dev/null
+	devNull, err := os.Open("/dev/null")
+	if err == nil {
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		defer func() { _ = devNull.Close() }() //nolint:errcheck // defer close
+	}
+
+	if err := cmd.Start(); err != nil {
 		log.Printf("[WARN] Failed to start agent with nohup: %v (will start via cron in 15 minutes)", err)
 		return nil
 	}
 
-	log.Print("[INFO] Agent started successfully in background using nohup")
+	// Detach from the process
+	if err := cmd.Process.Release(); err != nil {
+		log.Printf("[WARN] Failed to release process: %v", err)
+	}
+
+	log.Printf("[INFO] Agent started successfully in background using nohup (PID: %d)", cmd.Process.Pid)
 
 	// Give it a moment to start
 	time.Sleep(500 * time.Millisecond)

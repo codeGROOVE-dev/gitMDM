@@ -312,11 +312,28 @@ func checkAndCreatePIDFile() (exists bool, cleanup func()) {
 		}
 	}
 
-	// Write our PID
+	// Write our PID atomically using O_EXCL to prevent race conditions
 	pid := os.Getpid()
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+	pidFile, err := os.OpenFile(pidPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			// Another process created the file between our check and now
+			log.Print("[WARN] PID file was created by another process, exiting")
+			return false, func() {}
+		}
+		log.Printf("[WARN] Failed to create PID file: %v", err)
+		return true, func() {} // Continue without PID file
+	}
+
+	if _, err := pidFile.WriteString(strconv.Itoa(pid)); err != nil {
+		_ = pidFile.Close()    //nolint:errcheck // best effort cleanup
+		_ = os.Remove(pidPath) //nolint:errcheck // best effort cleanup
 		log.Printf("[WARN] Failed to write PID file: %v", err)
 		return true, func() {} // Continue without PID file
+	}
+
+	if err := pidFile.Close(); err != nil {
+		log.Printf("[WARN] Failed to close PID file: %v", err)
 	}
 
 	log.Printf("[INFO] Created PID file with PID %d", pid)

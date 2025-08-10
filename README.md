@@ -1,107 +1,32 @@
 # gitMDM
 
-The SOC-2 compliance solution for the discerningly paranoid security engineer.
+A security-first MDM that proves compliance without compromising your infrastructure.
 
 ![logo](./media/logo_small.png "gitMDM logo")
 
-## What Happens When a Security Engineer Builds an MDM
+## A Different Approach to Device Management
 
-gitMDM is what you get when you ask a security engineer to make an MDM tool. Traditional MDMs operate on the assumption that the central server is trustworthy and should have root access to execute arbitrary code on all endpoints. We think that's insane.
+Traditional MDMs were designed for corporate IT control. They require root access, execute remote commands, and create a massive attack surface. One compromised MDM server can mean game over for your entire fleet.
 
-**Core Security Principle**: A compromise of the MDM server should NOT result in a compromise of all agents reporting to it.
-
-This is why gitMDM:
-- **Cannot execute remote commands** - The server literally lacks the code to push commands to agents
-- **Uses cryptographic signatures** - All agent configurations are signed with Sigstore, preventing a compromised server from injecting malicious checks
-- **Runs without privileges** - Agents run as regular users, not root/SYSTEM
-- **Reports only** - Information flows one way: from agents to server, never the reverse
-
-## Your Problem
-
-Your startup just hit the enterprise sales milestone where someone asks "are you SOC 2 compliant?" Meanwhile, your engineering team runs OpenBSD on ThinkPads, Arch on Frameworks, and that one person still dailying Plan 9.
-
-Traditional MDMs run as root, execute arbitrary code from cloud servers, and auto-install binaries downloaded from the internet. Your security engineer just had an aneurysm.
-
-## Our Solution
-
-gitMDM proves compliance without the backdoor:
-
-```
-Traditional MDM: "Install our root agent that downloads and executes code from our servers!"
-Your Team: "How about no."
-
-gitMDM: "Run a read-only agent as a regular user that only reports"
-Your Team: "...continue"
-```
-
-### Why Your Security Team Will Actually Approve This
-
-- **Zero Remote Execution**: Can't push commands or install software. The server only receives data.
-- **Cryptographically Signed Configs**: All agent configurations require Sigstore signatures. A compromised server can't inject malicious checks.
-- **No Auto-Updates**: No downloading binaries from the internet. Updates require YOU to rebuild and redeploy.
-- **Runs as User**: No root, no SYSTEM. Can't execute arbitrary code or modify your system.
-- **You Own Everything**: Your server, your git repo, your data. No third-party cloud with root access to your fleet.
-- **Audit Everything**: Every change is a git commit. `git blame` for compliance.
+gitMDM takes a security-first approach. Built on the principle that even your MDM server shouldn't be trusted with root access to your machines.
 
 ## Demo
 
-Visit our demo instance at https://gitmdm.codegroove.dev/ - OK, so it's actually our prod instance.
+https://gitmdm.codegroove.dev/ - a real life instance of gitMDM.
 
-## Quick Start
+### Core Security Principles
 
-Build static binaries:
+**Zero Trust Architecture**: The server cannot execute commands on agents - we didn't just disable it, we never built it. A compromised server gets you compliance reports, not a botnet.
 
-```bash
-make all
-```
+**Defense in Depth**: Agents run as unprivileged users (not root). Checks are compiled into the binary. With Sigstore, configurations are cryptographically signed. Even without signatures, a compromised server can't inject malicious code.
 
-Run a server:
+**Minimal Attack Surface**: No listening ports on agents. No remote execution capability. No auto-updates. The agent can only send data, never receive commands. This isn't configurable - it's architectural.
 
-```bash
-gitmdm-server -git /var/git
-```
+**Transparency Through Simplicity**: Every check we run is visible in `checks.yaml`. The entire codebase is open source. Compliance data is stored in git with immutable history. Security through obscurity is not security.
 
-If you are a fan of Google Cloud Run, check out `./hacks/deploy.sh` for a deployment script.
+## What Makes This Secure
 
-On a client, the --install flag establishes persistence:
-
-```bash
-$ gitmdm-agent --install --server https://gitmdm.cloud --join XXXX
-```
-
-## What compliance items does gitMDM check for?
-
-Only the things that come up in a SOC-2 or ISO 27001 report:
-
-* Antivirus
-* Firewall
-* Full Disk Encryption
-* OS updates
-* Password complexity (respecting NIST 800-36B)
-* Screen locks
-
-## What kind of bizarre platforms do you support?
-
-```yaml
-# Your snowflake setups, our problem:
-- MATE on OpenBSD (we see you)
-- Sway on Alpine (of course)
-- i3 on Debian (classic)
-- Whatever that custom Wayland compositor you wrote is
-- macOS (10.15+)
-- Windows 11/10 (though we've never tried it)
-```
-
-## Installation That Respects Your OS
-
-- **Linux**: systemd user service (falls back to cron)
-- **(Dragonfly|Net|Free|Open)BSD**: cron
-- **macOS**: launchd
-- **Windows**: Task Scheduler
-
-We detect 11+ desktop environments because your team refuses to standardize.
-
-## Security Architecture
+Instead of giving servers control over devices, we use a one-way reporting model:
 
 ```
 [Agent]           [Server]          [Git]
@@ -113,57 +38,61 @@ We detect 11+ desktop environments because your team refuses to standardize.
        (execute)
 ```
 
-The server literally cannot execute commands. We removed the code. It's not there.
+Even if an attacker completely owns your server, they cannot:
+- Execute commands on agents
+- Install malware
+- Modify agent behavior
+- Access sensitive local files
+- Pivot to other machines
 
-### Configuration Integrity via Sigstore
+## Default Compliance Checks
 
-Every agent configuration is cryptographically signed using Sigstore's keyless signing:
+We verify only what's required for SOC 2 and ISO 27001:
+- Disk encryption status
+- Screen lock configuration
+- OS security updates
+- Firewall status
+- Antivirus presence
+- Password policy (NIST 800-63B compliant)
+
+Want different checks? Edit `cmd/agent/checks.yaml` and rebuild. The checks are part of the binary, not runtime configuration.
+
+## Platform Support
+
+Secure on every platform:
+- Linux (all distros, all desktop environments)
+- macOS (10.15+)
+- BSD variants (Free/Open/Net/Dragonfly)
+- Windows 10/11
+- Solaris/Illumos
+
+## Quick Start
 
 ```bash
-# Sign configuration with your GitHub identity
-gitmdm-sign --config cmd/agent/checks.yaml
+make all
 
-# Agent verifies signature at runtime
-gitmdm-agent --signed-by "github:yourusername@example.com"
+# Server (git-backed for auditability)
+gitmdm-server -git /var/git
+
+# Agent
+gitmdm-agent --install --server https://gitmdm.example.com --join KEY
 ```
 
-This means:
-- **Configurations are tamper-proof** - Any modification breaks the signature
-- **Identity-based trust** - You know exactly who signed each configuration (GitHub, Google, etc.)
-- **No key management** - Sigstore handles the PKI complexity
-- **Transparency logs** - All signatures are recorded in an immutable ledger
+We love Google Cloud Run for our deployment story - check out `./hacks/deploy.sh` to see how our own production infrastructure works.
 
-Even if an attacker compromises your server, they cannot:
-- Inject malicious compliance checks
-- Modify existing check definitions
-- Bypass signature verification on agents
+## Security FAQ
 
-### Future: Check-Build-Check
+**What's the worst case scenario if my server is compromised?**
+Attackers can read compliance reports and delete them. That's it. They cannot push commands, install software, or access agent machines.
 
-We're building automated remediation that maintains our security principles:
-- **Check**: Agent identifies non-compliance
-- **Build**: Server generates a fix script (signed, of course)
-- **Check**: Agent verifies the fix worked
+**Why not just use osquery?**
+osquery is powerful but requires careful configuration to avoid information leakage. gitMDM is purpose-built for compliance with security as the primary design constraint.
 
-Even remediation scripts will require cryptographic signatures. No unsigned code execution, ever.
+**How do you prevent supply chain attacks?**
+Agents are built from source, checks are compiled in, and with Sigstore integration, all configurations are cryptographically signed with identity verification. Minimal dependencies.
 
-## FAQ
-
-> "What happens if someone compromises the server?"
-
-They get read-only access to compliance reports. They cannot:
-- Push commands to agents (no code for it)
-- Modify agent behavior (signatures prevent it)
-- Install malware (agents don't accept commands)
-Perhaps they can clean up the old stale check-in data while they are there.
-
-> "What if someone tampers with the agent?"
-
-They can. It's their machine. They can also lie on spreadsheets. At least this has timestamps.
-
-> "Is this enterprise-ready?"
-
-No. But neither was Stripe when you started using it.
+**What about insider threats?**
+Even malicious insiders with server access can only view compliance data. To modify agent behavior requires rebuilding and redistributing the binary - leaving an audit trail.
 
 ---
 

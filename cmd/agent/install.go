@@ -22,8 +22,9 @@ const (
 
 // AgentConfig stores the agent configuration.
 type AgentConfig struct {
-	ServerURL string `json:"server_url"`
-	JoinKey   string `json:"join_key"`
+	ServerURL    string   `json:"server_url"`
+	JoinKey      string   `json:"join_key"`
+	ValidSigners []string `json:"valid_signers,omitempty"` // Allowed config file signers
 }
 
 // configDir returns the appropriate configuration directory for the platform.
@@ -99,7 +100,7 @@ func installExecutable(exePath, targetPath string) error {
 }
 
 // installAgent installs the agent to run automatically at system startup.
-func installAgent(serverURL, joinKey string) error {
+func installAgent(serverURL, joinKey string, allowedSigners []string) error {
 	// Get home directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -149,8 +150,9 @@ func installAgent(serverURL, joinKey string) error {
 
 	configPath := filepath.Join(configDir, configName)
 	config := AgentConfig{
-		ServerURL: serverURL,
-		JoinKey:   joinKey,
+		ServerURL:    serverURL,
+		JoinKey:      joinKey,
+		ValidSigners: allowedSigners,
 	}
 	configData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

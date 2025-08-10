@@ -87,7 +87,10 @@ var (
 	verbose    = flag.Bool("verbose", false, "Show all check outputs, not just failures (with --run all)")
 	install    = flag.Bool("install", false, "Install agent to run automatically at startup")
 	uninstall  = flag.Bool("uninstall", false, "Uninstall agent and remove autostart")
-	quiet      = false // Set to true to suppress INFO logs (used for interactive mode)
+	signedBy   = flag.String("signed-by", "github:t+github@stromberg.org",
+		"Comma-separated list of provider:identity pairs allowed to sign configs (e.g., github:username, google:email@example.com)")
+	skipSignatureCheck = flag.Bool("skip-signature-check", false, "Skip signature verification (INSECURE - for development only)")
+	quiet              = false // Set to true to suppress INFO logs (used for interactive mode)
 )
 
 // Agent represents the gitMDM agent that collects compliance data.
@@ -142,7 +145,8 @@ func (a *Agent) handleInstall() error {
 	log.Printf("✓ Device registered as: %s (%s)", a.hostname, a.hardwareID)
 
 	// Now proceed with installation
-	if err := installAgent(*server, *join); err != nil {
+	allowedSigners := parseAllowedSigners(*signedBy)
+	if err := installAgent(*server, *join, allowedSigners); err != nil {
 		return fmt.Errorf("installation failed: %w", err)
 	}
 	log.Println("✓ Agent installed successfully and will run automatically at startup")
@@ -225,6 +229,19 @@ func (a *Agent) configureServerConnection() error {
 
 // initializeAgent creates and initializes an Agent instance.
 func initializeAgent() (*Agent, error) {
+	// First, verify the embedded checks.yaml is properly signed
+	switch {
+	case !*skipSignatureCheck:
+		if err := verifyEmbeddedConfig(); err != nil {
+			return nil, fmt.Errorf("configuration signature verification failed: %w", err)
+		}
+	case isDevelopmentMode():
+		log.Print("[INFO] Development mode: signature verification disabled (running via 'go run')")
+	default:
+		log.Print("[WARN] ⚠️  SIGNATURE VERIFICATION SKIPPED (--skip-signature-check flag)")
+		log.Print("[WARN] Running with UNVERIFIED configuration - this is INSECURE!")
+	}
+
 	var cfg config.Config
 	if err := yaml.Unmarshal(checksConfig, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse checks config: %w", err)
@@ -247,7 +264,7 @@ func initializeAgent() (*Agent, error) {
 
 	return &Agent{
 		config:     &cfg,
-		hardwareID: hardwareID(),
+		hardwareID: hardwareID(context.Background()),
 		hostname:   hostname,
 		user:       user,
 		httpClient: &http.Client{
@@ -309,6 +326,10 @@ func checkAndCreatePIDFile() (exists bool, cleanup func()) {
 				}
 			}
 			log.Printf("[INFO] Removing stale PID file for non-existent process %d", oldPID)
+			// Remove the stale PID file so we can create our own
+			if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("[WARN] Failed to remove stale PID file: %v", err)
+			}
 		}
 	}
 
@@ -318,7 +339,8 @@ func checkAndCreatePIDFile() (exists bool, cleanup func()) {
 	if err != nil {
 		if os.IsExist(err) {
 			// Another process created the file between our check and now
-			log.Print("[WARN] PID file was created by another process, exiting")
+			// This is an actual race condition with another starting instance
+			log.Print("[INFO] Another agent instance is starting up, exiting")
 			return false, func() {}
 		}
 		log.Printf("[WARN] Failed to create PID file: %v", err)
@@ -350,6 +372,28 @@ func checkAndCreatePIDFile() (exists bool, cleanup func()) {
 	return true, cleanup
 }
 
+// isDevelopmentMode detects if the agent is running via "go run" instead of as a built binary.
+func isDevelopmentMode() bool {
+	// When go run executes, it creates binaries in temp with specific patterns:
+	// /tmp/go-build####/b###/exe/binary-name
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+
+	// Resolve symlinks to get the real path
+	realPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		realPath = exePath
+	}
+
+	// Check if path matches go run's pattern
+	// Must be in temp AND contain "go-build" AND have b### directory structure
+	return strings.Contains(realPath, filepath.Join(os.TempDir(), "go-build")) ||
+		strings.Contains(realPath, filepath.Join("/private"+os.TempDir(), "go-build")) // macOS symlink
+}
+
 func main() {
 	// Set up panic recovery first
 	defer func() {
@@ -360,6 +404,13 @@ func main() {
 	}()
 
 	flag.Parse()
+
+	// Auto-detect development mode
+	isDev := isDevelopmentMode()
+	if isDev && !*skipSignatureCheck {
+		// Automatically skip signature checks in development
+		*skipSignatureCheck = true
+	}
 
 	// Set up file logging (non-fatal if it fails)
 	var logFile *os.File
@@ -954,9 +1005,7 @@ func (*Agent) osVersion(ctx context.Context) string {
 	return "unknown"
 }
 
-func darwinHardwareID() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func darwinHardwareID(ctx context.Context) string {
 	cmd := exec.CommandContext(ctx, "ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
 	output, err := cmd.Output()
 	if err != nil {
@@ -982,7 +1031,7 @@ func darwinHardwareID() string {
 	return ""
 }
 
-func linuxHardwareID() string {
+func linuxHardwareID(_ context.Context) string {
 	data, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
 	if err == nil {
 		id := strings.TrimSpace(string(data))
@@ -1007,8 +1056,8 @@ func linuxHardwareID() string {
 	return ""
 }
 
-func bsdHardwareID() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func bsdHardwareID(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sysctl", "-n", "kern.hostuuid")
 	output, err := cmd.Output()
@@ -1025,8 +1074,8 @@ func bsdHardwareID() string {
 	return id
 }
 
-func solarisHardwareID() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func solarisHardwareID(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "hostid")
 	output, err := cmd.Output()
@@ -1043,9 +1092,9 @@ func solarisHardwareID() string {
 	return id
 }
 
-func illumosHardwareID() string {
+func illumosHardwareID(ctx context.Context) string {
 	// Try sysinfo first (Illumos specific)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sysinfo", "-p")
 	output, err := cmd.Output()
@@ -1063,11 +1112,11 @@ func illumosHardwareID() string {
 		}
 	}
 	// Fall back to hostid
-	return solarisHardwareID()
+	return solarisHardwareID(ctx)
 }
 
-func windowsHardwareID() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func windowsHardwareID(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, wmicCmd, "csproduct", wmicGetArg, "UUID")
 	output, err := cmd.Output()
@@ -1091,7 +1140,7 @@ func windowsHardwareID() string {
 	return ""
 }
 
-func hardwareID() string {
+func hardwareID(ctx context.Context) string {
 	start := time.Now()
 	if *debugMode {
 		log.Printf("[DEBUG] Detecting hardware ID for OS: %s", runtime.GOOS)
@@ -1100,17 +1149,17 @@ func hardwareID() string {
 	var id string
 	switch runtime.GOOS {
 	case osDarwin:
-		id = darwinHardwareID()
+		id = darwinHardwareID(ctx)
 	case osLinux:
-		id = linuxHardwareID()
+		id = linuxHardwareID(ctx)
 	case "freebsd", "openbsd", "netbsd", "dragonfly":
-		id = bsdHardwareID()
+		id = bsdHardwareID(ctx)
 	case "solaris":
-		id = solarisHardwareID()
+		id = solarisHardwareID(ctx)
 	case "illumos":
-		id = illumosHardwareID()
+		id = illumosHardwareID(ctx)
 	case osWindows:
-		id = windowsHardwareID()
+		id = windowsHardwareID(ctx)
 	default:
 		if *debugMode {
 			log.Printf("[DEBUG] Unsupported OS for hardware ID detection: %s", runtime.GOOS)

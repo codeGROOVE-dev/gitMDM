@@ -92,7 +92,7 @@ We love Google Cloud Run for our deployment story - check out `./hacks/deploy.sh
 Attackers can read compliance reports and delete them. That's it. They cannot push commands, install software, or access agent machines.
 
 **Why not just use osquery?**
-osquery is a great platform to build an MDM on top of, but its cross-platform support is limited.
+We ❤️ osquery – enough that we previously created [osquery-defense-kit](https://github.com/chainguard-dev/osquery-defense-kit) - but it's only part of an MDM solution, and didn't meet our goals when it came to platform support & operating with low privilege.
 
 **How do you prevent supply chain attacks?**
 Agents are built from source, checks are compiled in, and with Sigstore integration, all configurations are cryptographically signed with identity verification. Minimal dependencies.

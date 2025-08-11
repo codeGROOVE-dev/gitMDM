@@ -20,12 +20,12 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@4f3212b61783c3c68e8309a0f18a699764811cda  # v3.27.1
+        uses: github/codeql-action/init@76621b61decf072c1cee8dd1ce2d2a82d33c17ed  # v3.29.8
         with:
           languages: go
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@4f3212b61783c3c68e8309a0f18a699764811cda  # v3.27.1
+        uses: github/codeql-action/autobuild@76621b61decf072c1cee8dd1ce2d2a82d33c17ed  # v3.29.8
 
       - name: Analyze
-        uses: github/codeql-action/analyze@4f3212b61783c3c68e8309a0f18a699764811cda  # v3.27.1
+        uses: github/codeql-action/analyze@76621b61decf072c1cee8dd1ce2d2a82d33c17ed  # v3.29.8

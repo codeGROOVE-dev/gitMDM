@@ -10,9 +10,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"gitmdm/internal/gitmdm"
-	"gitmdm/internal/gitstore"
-	"gitmdm/internal/viewmodels"
 	"html/template"
 	"io/fs"
 	"log"
@@ -26,6 +23,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitstore"
+	"github.com/codeGROOVE-dev/gitMDM/internal/viewmodels"
 
 	"github.com/codeGROOVE-dev/retry"
 )

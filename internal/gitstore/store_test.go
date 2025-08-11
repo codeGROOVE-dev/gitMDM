@@ -3,13 +3,14 @@ package gitstore
 import (
 	"context"
 	"fmt"
-	"gitmdm/internal/gitmdm"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 )
 
 func TestSanitizeID(t *testing.T) {

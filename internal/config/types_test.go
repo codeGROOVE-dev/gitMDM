@@ -1,9 +1,10 @@
 package config_test
 
 import (
-	"gitmdm/internal/config"
 	"os"
 	"testing"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/config"
 
 	"gopkg.in/yaml.v3"
 )

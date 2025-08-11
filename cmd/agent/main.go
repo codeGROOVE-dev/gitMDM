@@ -11,9 +11,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"gitmdm/internal/analyzer"
-	"gitmdm/internal/config"
-	"gitmdm/internal/gitmdm"
 	"io"
 	"log"
 	"math"
@@ -30,6 +27,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/codeGROOVE-dev/gitMDM/internal/analyzer"
+	"github.com/codeGROOVE-dev/gitMDM/internal/config"
+	"github.com/codeGROOVE-dev/gitMDM/internal/gitmdm"
 
 	"github.com/codeGROOVE-dev/retry"
 	"gopkg.in/yaml.v3"

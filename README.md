@@ -4,9 +4,9 @@
 ![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/gitMDM)
 ![License](https://img.shields.io/github/license/codeGROOVE-dev/gitMDM)
 ![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/gitMDM)
-![Platform Support](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20bsd%20%7C%20windows-blue)
+![Platform Support](https://img.shields.io/badge/platform-linux%20%7C%20macos%20%7C%20bsd%20%7C%20windows%20%7C%20solaris%20%7C%20plan9%20-blue)
 
-A security-first MDM that proves compliance without compromising your infrastructure.
+A security-first MDM that manages compliance without compromising your infrastructure.
 
 ![logo](./media/logo_small.png "gitMDM logo")
 
@@ -14,21 +14,34 @@ A security-first MDM that proves compliance without compromising your infrastruc
 
 Traditional MDMs were designed for corporate IT control. They require root access, execute remote commands, and create a massive attack surface. One compromised MDM server can mean game over for your entire fleet.
 
-gitMDM takes a security-first approach. Built on the principle that even your MDM server shouldn't be trusted with root access to your machines.
+gitMDM takes a security-first approach. Built on the principle that a compromise of your MDM server shouldn't result in an instant root-level compromise of its clients.
+
+## Features
+
+* Cross-platform (Linux, macOS, *BSD, Solaris, Windows)
+* YAML configuration - cryptographically signed using [sigstore](https://sigstore.org/)
+* Designed to run as a non-root user
+* Uses [git](https://git.org/) as a datastore for a persistent trail of events
+* Secure-by-design with a minimal attack surface
+* Low maintenance, low dependencies
+* Self-hostable on anything from [Google Cloud Run](https://cloud.google.com/run) to a [Raspberry Pi running Plan 9](https://luksamuk.codes/posts/plan9-setup-rpi.html)
 
 ## Demo
 
-https://gitmdm.codegroove.dev/ - a real life instance of gitMDM.
+📺 https://gitmdm.codegroove.dev/ - a real-life unrestricted instance of gitMDM.
 
-### Core Security Principles
+## Default Compliance Checks
 
-**Zero Trust Architecture**: The server cannot execute commands on agents - we didn't just disable it, we never built it. A compromised server gets you compliance reports, not a botnet.
+By default, we verify only what we interpret as required for SOC 2 and ISO 27001 compliance:
 
-**Defense in Depth**: Agents run as unprivileged users (not root). Checks are compiled into the binary. With Sigstore, configurations are cryptographically signed. Even without signatures, a compromised server can't inject malicious code.
+- Disk encryption status
+- Screen lock configuration
+- OS security updates
+- Firewall status
+- Antivirus presence
+- Password policy (NIST 800-63B compliant)
 
-**Minimal Attack Surface**: No listening ports on agents. No remote execution capability. No auto-updates. The agent can only send data, never receive commands. This isn't configurable - it's architectural.
-
-**Transparency Through Simplicity**: Every check we run is visible in `checks.yaml`. The entire codebase is open source. Compliance data is stored in git with immutable history. Security through obscurity is not security.
+Want different checks? Edit `cmd/agent/checks.yaml`, sign the configuration, and run "make build". The checks are part of the binary, not runtime configuration.
 
 ## What Makes This Secure
 
@@ -44,61 +57,77 @@ Instead of giving servers control over devices, we use a one-way reporting model
        (execute)
 ```
 
-Even if an attacker completely owns your server, they cannot:
-- Execute commands on agents
-- Install malware
-- Modify agent behavior
-- Access sensitive local files
-- Pivot to other machines
+Even if an attacker completely owns your server, they cannot modify agent behavior.
 
-## Default Compliance Checks
-
-We verify only what's required for SOC 2 and ISO 27001:
-- Disk encryption status
-- Screen lock configuration
-- OS security updates
-- Firewall status
-- Antivirus presence
-- Password policy (NIST 800-63B compliant)
-
-Want different checks? Edit `cmd/agent/checks.yaml` and rebuild. The checks are part of the binary, not runtime configuration.
-
-## Platform Support
-
-Secure on every platform:
-- Linux (all distros, all desktop environments)
-- macOS (10.15+)
-- BSD variants (Free/Open/Net/Dragonfly)
-- Windows 10/11
-- Solaris/Illumos
+NOTE: We plan on making this approach more flexible in the future, but we will always choose secure-by-default.
 
 ## Quick Start
 
+### Server-less test of the agent
+
+Want to see what the agent checks for without connecting it to a server? We've got you covered:
+
+```
+go run ./cmd/agent/ --run all --verbose
+🔍 Running compliance checks...
+
+✅ AVAILABLE UPDATES [PASS]
+Command: softwareupdate -l
+Output:
+  Software Update Tool
+
+  Finding available software
+Stderr: No new software available.
+
+Status: OK
+...
+
+```
+
+### Client/Server configuration
+
+Build the command-line utilities:
+
 ```bash
 make all
-
-# Server (git-backed for auditability)
-gitmdm-server -git /var/git
-
-# Agent
-gitmdm-agent --install --server https://gitmdm.example.com --join KEY
 ```
+
+To run the MDM server, there are two options for storage:
+
+* `-git`: the location of a git repo to clone and push to; if it's a local directory, we'll even `git init` the directory for you
+* `-clone`: the path to a locally checked out clone of a remote git repo.
+
+```
+gitmdm-server -git /var/git
+```
+
+By default, the server will generate a join key that clients need to confirm they are talking to the correct server. You can pass in a custom string using `--join scoobysnacks`. If the join key leaks, the worst someone can do is upload garbage compliance data for their machine.
 
 We love Google Cloud Run for our deployment story - check out `./hacks/deploy.sh` to see how our own production infrastructure works.
 
+
+# Agent
+
+To test the agent against the server, use:
+
+```
+gitmdm-agent --server http://localhost:8080 --join KEY
+```
+
+To persistently install the agent, add `--install`, which will populate launchd (macOS), task scheduler (Windows), user-systemd (Linux), or cron (elsewhere).
+
 ## Security FAQ
 
-**What's the worst case scenario if my server is compromised?**
-Attackers can read compliance reports and delete them. That's it. They cannot push commands, install software, or access agent machines.
+**What's the worst-case scenario if my server is compromised?**
 
-**Why not just use osquery?**
-We ❤️ osquery – enough that we previously created [osquery-defense-kit](https://github.com/chainguard-dev/osquery-defense-kit) - but it's only part of an MDM solution, and didn't meet our goals when it came to platform support & operating with low privilege.
+Attackers can read compliance reports and trash them. They cannot push commands, install software, or access agent machines.
 
 **How do you prevent supply chain attacks?**
 Agents are built from source, checks are compiled in, and with Sigstore integration, all configurations are cryptographically signed with identity verification. Minimal dependencies.
 
-**What about insider threats?**
-Even malicious insiders with server access can only view compliance data. To modify agent behavior requires rebuilding and redistributing the binary - leaving an audit trail.
+## Contributions
+
+... are very much appreciated. We actually want this to be useful.
 
 ---
 

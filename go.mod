@@ -6,7 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/codeGROOVE-dev/retry v1.3.0
-	github.com/go-git/go-git/v5 v5.16.3
+	github.com/go-git/go-git/v5 v5.16.4
 	gopkg.in/yaml.v3 v3.0.1
 )
 

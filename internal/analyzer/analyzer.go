@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/codeGROOVE-dev/gitMDM/internal/config"
@@ -42,15 +43,13 @@ func AnalyzeCheck(output *gitmdm.CommandOutput, rule config.CommandRule) error {
 			return fmt.Errorf("invalid includes regex: %w", err)
 		}
 
-		// Split content into lines and check each one
-		lines := strings.Split(content, "\n")
-		for _, line := range lines {
-			if includesRegex.MatchString(line) {
-				output.Failed = true
-				output.FailReason = fmt.Sprintf("Output matched failure pattern: %s", rule.Includes)
-				output.Remediation = rule.Remediation
-				return nil // Not an error, just a failed check
-			}
+		// Check if any line matches the failure pattern
+		lines := slices.Collect(strings.SplitSeq(content, "\n"))
+		if slices.ContainsFunc(lines, includesRegex.MatchString) {
+			output.Failed = true
+			output.FailReason = fmt.Sprintf("Output matched failure pattern: %s", rule.Includes)
+			output.Remediation = rule.Remediation
+			return nil // Not an error, just a failed check
 		}
 	}
 
@@ -61,15 +60,9 @@ func AnalyzeCheck(output *gitmdm.CommandOutput, rule config.CommandRule) error {
 			return fmt.Errorf("invalid excludes regex: %w", err)
 		}
 
-		// Split content into lines and check if any line matches
-		lines := strings.Split(content, "\n")
-		matchFound := false
-		for _, line := range lines {
-			if excludesRegex.MatchString(line) {
-				matchFound = true
-				break
-			}
-		}
+		// Check if any line matches the pattern
+		lines := slices.Collect(strings.SplitSeq(content, "\n"))
+		matchFound := slices.ContainsFunc(lines, excludesRegex.MatchString)
 
 		if !matchFound {
 			output.Failed = true

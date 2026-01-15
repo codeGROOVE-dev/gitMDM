@@ -49,9 +49,7 @@ func verifyEmbeddedConfig() error {
 	signerEmail, err := verifySignatureBundle(checksConfig, checksConfigSignature, allowedSigners)
 	if err != nil {
 		// Check if it's an invalid signature (modified file)
-		if strings.HasPrefix(err.Error(), "invalid_signature:") {
-			signer := strings.TrimPrefix(err.Error(), "invalid_signature:")
-
+		if signer, ok := strings.CutPrefix(err.Error(), "invalid_signature:"); ok {
 			log.Print("[ERROR] ⚠️  Configuration Modified After Signing")
 			log.Print(errorPrefix)
 			log.Printf("[ERROR] The checks.yaml was changed after being signed by: %s", signer)

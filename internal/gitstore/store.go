@@ -137,16 +137,9 @@ func NewRemote(ctx context.Context, gitURL string) (*Store, error) {
 	log.Printf("[INFO] Cloning repository from %s to %s", gitURL, tempDir)
 
 	var repo *git.Repository
+	// Setup authentication - go-git will use default SSH agent or keys
+	// Could add HTTP basic auth or SSH keys here if needed
 	var auth transport.AuthMethod
-
-	// Setup authentication if needed
-	if strings.HasPrefix(gitURL, "https://") || strings.HasPrefix(gitURL, "http://") {
-		// Could add HTTP basic auth here if needed
-		auth = nil
-	} else if strings.HasPrefix(gitURL, "git@") || strings.Contains(gitURL, ":") {
-		// SSH auth - will use SSH agent or default keys
-		auth = nil // go-git will try default SSH auth
-	}
 
 	err = retry.Do(func() error {
 		cloneOptions := &git.CloneOptions{

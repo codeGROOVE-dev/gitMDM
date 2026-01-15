@@ -159,10 +159,7 @@ func (a *Agent) verifyServerConnection(ctx context.Context, report gitmdm.Device
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(float64(initialBackoff) * math.Pow(2, float64(attempt-1)))
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+			backoff := min(time.Duration(float64(initialBackoff)*math.Pow(2, float64(attempt-1))), maxBackoff)
 			log.Printf("[INFO] Retrying verification (attempt %d/%d) after %v...", attempt, maxRetries, backoff)
 			select {
 			case <-time.After(backoff):
@@ -632,15 +629,15 @@ func (a *Agent) processFailedReports(ctx context.Context) {
 			return
 		case <-ticker.C:
 			// Drain all queued reports
+		drainLoop:
 			for {
 				select {
 				case report := <-a.failedReports:
 					a.retryFailedReport(ctx, report)
 				default:
-					goto drained
+					break drainLoop
 				}
 			}
-		drained:
 		}
 	}
 }
@@ -773,19 +770,19 @@ func (a *Agent) runSingleCheck(checkName string) string {
 		return fmt.Sprintf("Check '%s' not available for %s", checkName, osName)
 	}
 
-	var outputBuilder strings.Builder
+	var buf strings.Builder
 	var outputs []gitmdm.CommandOutput
 
 	for i, rule := range rules {
 		if i > 0 {
-			outputBuilder.WriteString("\n\n=== Rule " + strconv.Itoa(i+1) + " ===\n")
+			buf.WriteString("\n\n=== Rule " + strconv.Itoa(i+1) + " ===\n")
 		}
 
 		// Display what we're checking
 		if rule.File != "" {
-			outputBuilder.WriteString("File: " + rule.File + "\n")
+			buf.WriteString("File: " + rule.File + "\n")
 		} else if rule.Output != "" {
-			outputBuilder.WriteString("Command: " + rule.Output + "\n")
+			buf.WriteString("Command: " + rule.Output + "\n")
 		}
 
 		output := a.executeCheck(ctx, checkName, rule)
@@ -793,50 +790,50 @@ func (a *Agent) runSingleCheck(checkName string) string {
 
 		switch {
 		case output.FileMissing:
-			outputBuilder.WriteString("File not found\n")
+			buf.WriteString("File not found\n")
 		case output.Skipped:
-			outputBuilder.WriteString("Command not available\n")
+			buf.WriteString("Command not available\n")
 		default:
 			if output.Stdout != "" {
-				outputBuilder.WriteString(output.Stdout)
+				buf.WriteString(output.Stdout)
 			}
 			if output.Stderr != "" {
-				outputBuilder.WriteString("\n--- STDERR ---\n" + output.Stderr)
+				buf.WriteString("\n--- STDERR ---\n" + output.Stderr)
 			}
 			if output.ExitCode != 0 {
-				outputBuilder.WriteString(fmt.Sprintf("\n--- EXIT CODE: %d ---", output.ExitCode))
+				buf.WriteString(fmt.Sprintf("\n--- EXIT CODE: %d ---", output.ExitCode))
 			}
 		}
 
 		// Show analysis for this specific rule
 		if output.Failed {
-			outputBuilder.WriteString(fmt.Sprintf("\n--- FAILED: %s ---", output.FailReason))
+			buf.WriteString(fmt.Sprintf("\n--- FAILED: %s ---", output.FailReason))
 		} else if !output.Skipped && !output.FileMissing {
-			outputBuilder.WriteString("\n--- PASSED ---")
+			buf.WriteString("\n--- PASSED ---")
 		}
 	}
 
 	// Overall status analysis
 	status, reason, remediation := analyzer.DetermineOverallStatus(outputs)
 
-	outputBuilder.WriteString("\n\n=== OVERALL RESULT ===")
+	buf.WriteString("\n\n=== OVERALL RESULT ===")
 	switch status {
 	case statusPass:
-		outputBuilder.WriteString(fmt.Sprintf("\n✅ PASS: %s", reason))
+		buf.WriteString(fmt.Sprintf("\n✅ PASS: %s", reason))
 	case statusFail:
-		outputBuilder.WriteString(fmt.Sprintf("\n❌ FAIL: %s", reason))
+		buf.WriteString(fmt.Sprintf("\n❌ FAIL: %s", reason))
 		// Show command-specific remediation steps for failed checks
 		if len(remediation) > 0 {
-			outputBuilder.WriteString("\n\n=== HOW TO FIX ===")
+			buf.WriteString("\n\n=== HOW TO FIX ===")
 			for i, step := range remediation {
-				outputBuilder.WriteString(fmt.Sprintf("\n%d. %s", i+1, step))
+				buf.WriteString(fmt.Sprintf("\n%d. %s", i+1, step))
 			}
 		}
 	default:
-		outputBuilder.WriteString(fmt.Sprintf("\n➖ NOT APPLICABLE: %s", reason))
+		buf.WriteString(fmt.Sprintf("\n➖ NOT APPLICABLE: %s", reason))
 	}
 
-	return outputBuilder.String()
+	return buf.String()
 }
 
 func (*Agent) systemUptime(ctx context.Context) string {
@@ -845,9 +842,7 @@ func (*Agent) systemUptime(ctx context.Context) string {
 
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
-		cmd = exec.CommandContext(ctx, "uptime")
-	case "solaris", "illumos":
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "illumos":
 		cmd = exec.CommandContext(ctx, "uptime")
 	case osWindows:
 		cmd = exec.CommandContext(ctx, wmicCmd, "os", wmicGetArg, "lastbootuptime")
@@ -948,10 +943,8 @@ func (*Agent) osInfo(ctx context.Context) string {
 	case osLinux:
 		// Try to get pretty name from os-release
 		if data, err := os.ReadFile("/etc/os-release"); err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "PRETTY_NAME=") {
-					name := strings.TrimPrefix(line, "PRETTY_NAME=")
+			for line := range strings.SplitSeq(string(data), "\n") {
+				if name, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
 					return strings.Trim(name, `"`)
 				}
 			}
@@ -985,13 +978,12 @@ func (*Agent) osVersion(ctx context.Context) string {
 	defer cancel()
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case osLinux:
-		cmd = exec.CommandContext(ctx, "uname", "-r")
 	case osDarwin:
 		cmd = exec.CommandContext(ctx, "sw_vers", "-productVersion")
 	case osWindows:
 		cmd = exec.CommandContext(ctx, wmicCmd, "os", wmicGetArg, "Version", "/value")
 	default:
+		// Linux and other Unix-like systems
 		cmd = exec.CommandContext(ctx, "uname", "-r")
 	}
 	if output, err := cmd.Output(); err == nil {
@@ -1016,8 +1008,7 @@ func darwinHardwareID(ctx context.Context) string {
 		return ""
 	}
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		if strings.Contains(line, "IOPlatformUUID") {
 			parts := strings.Split(line, "\"")
 			if len(parts) >= minUUIDParts {
@@ -1100,10 +1091,8 @@ func illumosHardwareID(ctx context.Context) string {
 	cmd := exec.CommandContext(ctx, "sysinfo", "-p")
 	output, err := cmd.Output()
 	if err == nil {
-		lines := strings.Split(string(output), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "UUID=") {
-				id := strings.TrimPrefix(line, "UUID=")
+		for line := range strings.SplitSeq(string(output), "\n") {
+			if id, ok := strings.CutPrefix(line, "UUID="); ok {
 				id = strings.TrimSpace(id)
 				if *debugMode {
 					log.Printf("[DEBUG] Found Illumos UUID: %s", id)
@@ -1128,8 +1117,7 @@ func windowsHardwareID(ctx context.Context) string {
 		return ""
 	}
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" && trimmed != "UUID" {
 			if *debugMode {

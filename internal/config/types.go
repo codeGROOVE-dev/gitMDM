@@ -49,8 +49,7 @@ func (cd CheckDefinition) CommandsForOS(osName string) []CommandRule {
 	// Check comma-separated keys
 	for key := range cd {
 		if strings.Contains(key, ",") {
-			parts := strings.Split(key, ",")
-			for _, part := range parts {
+			for part := range strings.SplitSeq(key, ",") {
 				if strings.TrimSpace(part) == osName {
 					if rules := cd.parseRules(key); rules != nil {
 						return rules

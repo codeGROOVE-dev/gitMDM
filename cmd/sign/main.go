@@ -164,26 +164,28 @@ func showSignerInfo(certPEM []byte) {
 	// Find email
 	if idx := strings.Index(certStr, "@"); idx > 0 {
 		// Get a reasonable chunk around the @
-		start := idx - emailContextBefore
-		if start < 0 {
-			start = 0
-		}
-		end := idx + emailContextAfter
-		if end > len(certStr) {
-			end = len(certStr)
-		}
+		start := max(0, idx-emailContextBefore)
+		end := min(idx+emailContextAfter, len(certStr))
 		chunk := certStr[start:end]
 
 		// Find @ again in chunk and extract email-like string
 		if at := strings.Index(chunk, "@"); at > 0 {
 			// Simple extraction: take non-space characters around @
-			email := ""
-			for i := at; i >= 0 && chunk[i] > asciiSpace; i-- {
-				email = string(chunk[i]) + email
+			var builder strings.Builder
+			// Collect characters before @ (in reverse order)
+			start := at
+			for start >= 0 && chunk[start] > asciiSpace {
+				start--
 			}
-			for i := at + 1; i < len(chunk) && chunk[i] > asciiSpace; i++ {
-				email += string(chunk[i])
+			start++
+			builder.WriteString(chunk[start : at+1])
+			// Collect characters after @
+			end := at + 1
+			for end < len(chunk) && chunk[end] > asciiSpace {
+				end++
 			}
+			builder.WriteString(chunk[at+1 : end])
+			email := builder.String()
 			if strings.Contains(email, ".") {
 				fmt.Printf("\n✓ Signed by: %s:%s\n", provider, email)
 				fmt.Printf("✓ To allow: --signed-by \"%s:%s\"\n", provider, email)

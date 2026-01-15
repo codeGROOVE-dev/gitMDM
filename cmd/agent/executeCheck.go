@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/gitMDM/internal/analyzer"
@@ -81,43 +79,16 @@ func (*Agent) readFile(checkName string, rule config.CommandRule) gitmdm.Command
 }
 
 // checkCommandAvailable verifies that a command is available to execute.
+// This is a wrapper around validateCommand that sets the appropriate fields for executeCheck.
 func checkCommandAvailable(checkName, command string) *gitmdm.CommandOutput {
-	if containsShellOperators(command) {
-		return nil // Commands with shell operators need shell interpretation
+	output := validateCommand(checkName, command)
+	if output != nil {
+		// Convert exitCode -2 to Skipped/FileMissing for executeCheck
+		output.Skipped = true
+		output.FileMissing = true
+		output.ExitCode = 0
 	}
-
-	commandParts := strings.Fields(command)
-	if len(commandParts) == 0 {
-		return nil
-	}
-
-	primaryCmd := commandParts[0]
-	if isShellBuiltin(primaryCmd) || strings.Contains(primaryCmd, "/") {
-		return nil // Shell builtins and absolute paths don't need validation
-	}
-
-	// Temporarily set PATH for LookPath
-	oldPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", securePath()); err != nil {
-		log.Printf("[WARN] Failed to set PATH for command check: %v", err)
-	}
-	_, lookupErr := exec.LookPath(primaryCmd)
-	if err := os.Setenv("PATH", oldPath); err != nil {
-		log.Printf("[WARN] Failed to restore PATH: %v", err)
-	}
-
-	if lookupErr != nil {
-		if *debugMode {
-			log.Printf("[DEBUG] Command '%s' not found in PATH for check '%s', skipping", primaryCmd, checkName)
-		}
-		return &gitmdm.CommandOutput{
-			Command:     command,
-			Skipped:     true,
-			FileMissing: true, // Treat missing command like missing file
-			Stderr:      fmt.Sprintf("Skipped: %s not found", primaryCmd),
-		}
-	}
-	return nil
+	return output
 }
 
 // executeCommand executes a command and returns its output.

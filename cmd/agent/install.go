@@ -473,7 +473,7 @@ func installCron(agentPath, _, _ string) error {
 		log.Printf("[INFO] Cron job for %s already installed, updating entries", agentName)
 		// Remove old entries to replace with new ones
 		var filteredLines []string
-		for _, line := range strings.Split(currentCron, "\n") {
+		for line := range strings.SplitSeq(currentCron, "\n") {
 			if !strings.Contains(line, agentName) {
 				filteredLines = append(filteredLines, line)
 			}
@@ -487,13 +487,16 @@ func installCron(agentPath, _, _ string) error {
 		fmt.Sprintf("@reboot %s", agentPath),
 		fmt.Sprintf("*/15 * * * * %s", agentPath), // Every 15 minutes
 	}
-	newCron := currentCron
-	if !strings.HasSuffix(newCron, "\n") && newCron != "" {
-		newCron += "\n"
+	var builder strings.Builder
+	builder.WriteString(currentCron)
+	if !strings.HasSuffix(currentCron, "\n") && currentCron != "" {
+		builder.WriteString("\n")
 	}
 	for _, entry := range entries {
-		newCron += entry + "\n"
+		builder.WriteString(entry)
+		builder.WriteString("\n")
 	}
+	newCron := builder.String()
 
 	// Install new crontab
 	log.Printf("[INFO] Installing cron entries for %s", agentPath)
@@ -578,7 +581,7 @@ func uninstallCron() error {
 
 	// Remove gitmdm-agent entries
 	var newLines []string
-	for _, line := range strings.Split(currentCron, "\n") {
+	for line := range strings.SplitSeq(currentCron, "\n") {
 		if !strings.Contains(line, "gitmdm-agent") {
 			newLines = append(newLines, line)
 		}

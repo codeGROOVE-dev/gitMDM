@@ -341,12 +341,11 @@ func parseMacOSOutput(output string) (osName, version string) {
 	}
 
 	var productName, productVersion string
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "ProductName:") {
-			productName = strings.TrimSpace(strings.TrimPrefix(line, "ProductName:"))
-		} else if strings.HasPrefix(line, "ProductVersion:") {
-			productVersion = strings.TrimSpace(strings.TrimPrefix(line, "ProductVersion:"))
+	for line := range strings.SplitSeq(output, "\n") {
+		if name, ok := strings.CutPrefix(line, "ProductName:"); ok {
+			productName = strings.TrimSpace(name)
+		} else if version, ok := strings.CutPrefix(line, "ProductVersion:"); ok {
+			productVersion = strings.TrimSpace(version)
 		}
 	}
 
@@ -363,15 +362,20 @@ func parseLinuxOutput(output string) (osName, version string) {
 	}
 
 	var name, versionStr string
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(output, "\n") {
 		switch {
 		case strings.HasPrefix(line, "NAME="):
-			name = strings.Trim(strings.TrimPrefix(line, "NAME="), `"`)
+			if val, ok := strings.CutPrefix(line, "NAME="); ok {
+				name = strings.Trim(val, `"`)
+			}
 		case strings.HasPrefix(line, "VERSION="):
-			versionStr = strings.Trim(strings.TrimPrefix(line, "VERSION="), `"`)
+			if val, ok := strings.CutPrefix(line, "VERSION="); ok {
+				versionStr = strings.Trim(val, `"`)
+			}
 		case strings.HasPrefix(line, "VERSION_ID=") && versionStr == "":
-			versionStr = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), `"`)
+			if val, ok := strings.CutPrefix(line, "VERSION_ID="); ok {
+				versionStr = strings.Trim(val, `"`)
+			}
 		default:
 			// No action needed for other lines
 		}
@@ -417,8 +421,7 @@ func parseWindowsOutput(output string) (osName, version string) {
 	}
 
 	var osNameStr, osVersion string
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(output, "\n") {
 		if strings.Contains(line, "OS Name:") {
 			parts := strings.Split(line, ":")
 			if len(parts) > 1 {

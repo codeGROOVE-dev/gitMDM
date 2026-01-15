@@ -35,16 +35,11 @@ func securePath() string {
 	case "darwin":
 		// macOS standard paths + ApplicationFirewall for socketfilterfw
 		return "/usr/libexec/ApplicationFirewall:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	case "linux":
-		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	case "freebsd", "openbsd", "netbsd", "dragonfly":
-		// BSD systems often have important tools in /usr/local
-		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	case "solaris", "illumos":
 		// Solaris/Illumos have additional paths
 		return "/usr/sbin:/usr/bin:/sbin:/bin:/usr/gnu/bin:/opt/local/bin"
 	default:
-		// Safe default for unknown Unix-like systems
+		// Standard Unix-like paths (Linux, BSD systems)
 		return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 }

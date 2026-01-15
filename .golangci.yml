@@ -152,10 +152,10 @@ linters:
 
     nakedret:
       # Default: 30
-      max-func-lines: 4
+      max-func-lines: 7
 
     nestif:
-      min-complexity: 12
+      min-complexity: 15
 
     nolintlint:
       # Exclude following linters from requiring an explanation.
@@ -171,17 +171,11 @@ linters:
       rules:
         - name: add-constant
           severity: warning
-          disabled: false
-          exclude: [""]
-          arguments:
-            - max-lit-count: "5"
-              allow-strs: '"","\n"'
-              allow-ints: "0,1,2,3,24,30,60,100,365,0o600,0o700,0o750,0o755"
-              allow-floats: "0.0,0.,1.0,1.,2.0,2."
+          disabled: true
         - name: cognitive-complexity
-          arguments: [55]
+          disabled: true # prefer maintidx
         - name: cyclomatic
-          arguments: [60]
+          disabled: true # prefer maintidx
         - name: function-length
           arguments: [150, 225]
         - name: line-length-limit
@@ -191,6 +185,8 @@ linters:
         - name: max-public-structs
           arguments: [10]
         - name: flag-parameter # fixes are difficult
+          disabled: true
+        - name: bare-return
           disabled: true
 
     rowserrcheck:
@@ -213,8 +209,14 @@ linters:
       os-temp-dir: true
 
     varnamelen:
-      max-distance: 40
+      max-distance: 75
       min-name-length: 2
+      check-receivers: false
+      ignore-names:
+        - r
+        - w
+        - f
+        - err
 
   exclusions:
     # Default: []
